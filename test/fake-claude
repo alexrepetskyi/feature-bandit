@@ -1,71 +1,169 @@
 #!/usr/bin/env bash
-# fake claude for the FeatureBandit smoke test: canned envelopes, real file writes
+# shellcheck disable=SC2016
+#   the greet.sh this writes uses $1 at its own runtime, not at this one
+# Stand-in for the claude CLI in the FeatureBandit tests.
+# It answers the same envelopes the real CLI does and performs the same file
+# writes the real Spec Kit commands would, so the shell logic is exercised for
+# free. Test knobs are environment variables, all optional:
+#   FAKE_LOG             append one line per call
+#   FAKE_EXIT_ON         substring of a prompt this call should fail on
+#   FAKE_CONVERGE_ADD    let converge append one task, once
+#   FAKE_NO_PLUGIN       name of a plugin to report as not installed
+#   FAKE_INSTALL_DIR     where `claude plugin install` records what it installed
+#   FAKE_INSTALL_EXIT    exit code for `claude plugin install` (default 0)
+#   FAKE_UNTRACKED       implement also drops an untracked file
+#   FAKE_CLARIFY_NONE    clarify reports no open questions
+#   FAKE_CHECKLIST_OPEN  the checklist leaves one item unchecked, once
+#   FAKE_HIJACK_ON       substring of a prompt after which the branch is switched
+#   FAKE_SLOW            seconds to spend before answering
+#   FAKE_EXIT_CODE       exit code to use with FAKE_EXIT_ON (default 1)
+#   FAKE_NOISY           emit many stdout and stderr lines
 
 if [ "$1" = plugin ]; then
-  echo '[{"id":"feature-dev@claude-plugins-official","enabled":true},
-        {"id":"superpowers@superpowers-dev","enabled":true},
-        {"id":"code-simplifier@claude-plugins-official","enabled":true}]'
+  case "$2" in
+    marketplace) exit 0 ;;
+    install)
+      # "<name>@<marketplace>" — record it so the next list call reports it
+      [ -n "$FAKE_INSTALL_DIR" ] && mkdir -p "$FAKE_INSTALL_DIR" &&
+        : > "$FAKE_INSTALL_DIR/${3%%@*}"
+      echo "installed $3"
+      exit "${FAKE_INSTALL_EXIT:-0}" ;;
+  esac
+  for p in superpowers pr-review-toolkit code-simplifier; do
+    [ "$p" = "$FAKE_NO_PLUGIN" ] && [ ! -f "$FAKE_INSTALL_DIR/$p" ] && continue
+    printf '{"id":"%s@claude-plugins-official","enabled":true}\n' "$p"
+  done | jq -sc .
   exit 0
 fi
 
-prompt=""; schema=""
+prompt=""; resume=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -p) prompt="$2"; shift 2 ;;
-    --json-schema) schema="$2"; shift 2 ;;
+    --resume) resume="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
 
-echo "FAKE CLAUDE CALL: $(printf '%s' "$prompt" | head -1)" >> "$FAKE_LOG"
+[ -n "$FAKE_LOG" ] && printf '%s\n' "$(printf '%s' "$prompt" | head -1)" >> "$FAKE_LOG"
 
-envelope() { # $1 = structured json or empty
-  if [ -n "$1" ]; then
-    jq -nc --argjson s "$1" '{type:"result",is_error:false,session_id:"sess-1",result:($s|tostring),structured_output:$s}'
-  else
-    jq -nc '{type:"result",is_error:false,session_id:"sess-1",result:"done"}'
-  fi
-}
+[ -n "$FAKE_SLOW" ] && sleep "$FAKE_SLOW"
+
+# real claude keeps stdout to the JSON envelope and puts diagnostics on stderr,
+# so the noise goes to stderr and into the reported text, never around the JSON
+noise=""
+if [ -n "$FAKE_NOISY" ]; then
+  i=1; while [ $i -le 8 ]; do echo "stderr diagnostic line $i" >&2; i=$((i + 1)); done
+  i=1; while [ $i -le 60 ]; do noise="$noise
+report line $i"; i=$((i + 1)); done
+fi
+
+if [ -n "$FAKE_EXIT_ON" ]; then
+  case "$prompt" in
+    *"$FAKE_EXIT_ON"*)
+      echo "fake claude: forced failure" >&2
+      echo "fake claude: see the log for details" >&2
+      exit "${FAKE_EXIT_CODE:-1}" ;;
+  esac
+fi
+
+if [ -n "$FAKE_HIJACK_ON" ]; then
+  case "$prompt" in *"$FAKE_HIJACK_ON"*) git checkout -q -b hijacked 2>/dev/null ;; esac
+fi
+
+result() { jq -nc --arg r "$1$noise" '{type:"result",is_error:false,session_id:"sess-1",result:$r}'; }
+feature_dir() { jq -r '.feature_directory' .specify/feature.json; }
+
+# an answer fed back into an interactive session
+if [ -n "$resume" ]; then
+  result "Recorded. Clarification session complete."
+  exit 0
+fi
+
+# spec kit spells its commands /speckit-<name> in skills mode and
+# /speckit.<name> in commands mode; both reach the same behaviour
+speckit=$(printf '%s' "$prompt" | sed -n 's|^/speckit[-.]\([a-z]*\).*|\1|p')
+
+case "$speckit" in
+  specify)
+    dir="specs/001-feature"
+    mkdir -p "$dir"
+    printf '# Feature specification\n\n- FR-001: greet the user by name.\n- AC-001: greet("x") prints "hello x".\n' > "$dir/spec.md"
+    mkdir -p .specify
+    jq -nc --arg d "$dir" '{feature_directory:$d}' > .specify/feature.json
+    result "Created $dir/spec.md"
+    exit 0 ;;
+  clarify)
+    if [ -n "$FAKE_CLARIFY_NONE" ]; then
+      result "No critical ambiguities detected worth formal clarification."
+    else
+      result "**Question:** Should the greeting be localised? (FR-001)
+
+**Why it matters:** it decides whether the output is a fixed string."
+    fi
+    exit 0 ;;
+  checklist)
+    d=$(feature_dir); mkdir -p "$d/checklists"
+    if [ -n "$FAKE_CHECKLIST_OPEN" ] && [ ! -f "$d/.checked" ]; then
+      : > "$d/.checked"
+      printf '# Requirements quality\n\n- [x] CHK001 Every requirement is testable\n- [ ] CHK002 Failure behaviour is stated\n' > "$d/checklists/requirements.md"
+    else
+      printf '# Requirements quality\n\n- [x] CHK001 Every requirement is testable\n- [x] CHK002 Failure behaviour is stated\n' > "$d/checklists/requirements.md"
+    fi
+    result "Wrote $d/checklists/requirements.md"
+    exit 0 ;;
+  plan)
+    d=$(feature_dir)
+    printf '# Implementation plan\n\nAdd greet.sh, test it with make test.\n' > "$d/plan.md"
+    result "Wrote $d/plan.md"
+    exit 0 ;;
+  tasks)
+    d=$(feature_dir)
+    printf '# Tasks\n\n## Phase 1: Core\n\n- [ ] T001 Write the greet test\n- [ ] T002 Implement greet\n- [ ] T003 Wire it up\n- [ ] T004 Document it\n' > "$d/tasks.md"
+    result "Wrote $d/tasks.md"
+    exit 0 ;;
+  analyze)
+    result "## Analysis
+
+| ID | Category | Severity | Summary |
+|----|----------|----------|---------|
+| C1 | coverage | LOW      | FR-001 is covered by T001-T003 |"
+    exit 0 ;;
+  implement)
+    d=$(feature_dir)
+    ids=$(printf '%s' "$prompt" | sed -n 's/.*and then stop: \([^.]*\)\..*/\1/p')
+    printf 'greet() { echo "hello $1"; }\n' > greet.sh
+    [ -n "$FAKE_UNTRACKED" ] && printf 'scratch\n' > scratch.tmp
+    for id in $ids; do
+      sed "s/^- \[ \] $id /- [X] $id /" "$d/tasks.md" > "$d/tasks.md.new" && mv "$d/tasks.md.new" "$d/tasks.md"
+    done
+    result "Completed $(printf '%s' "$ids" | tr '\n' ' ')"
+    exit 0 ;;
+  converge)
+    d=$(feature_dir)
+    if [ -n "$FAKE_CONVERGE_ADD" ] && ! grep -q 'Phase 2: Convergence' "$d/tasks.md"; then
+      printf '\n## Phase 2: Convergence\n\n- [ ] T005 Add the missing failure path per FR-001 (partial)\n' >> "$d/tasks.md"
+      result "Appended 1 task under Phase 2: Convergence"
+    else
+      result "Converged — the implementation satisfies the spec, plan, and tasks."
+    fi
+    exit 0 ;;
+esac
 
 case "$prompt" in
-  *"requirements analyst"*)
-    envelope '{"context_summary":"# Context\nA tiny repo.","gaps":[{"id":"GAP-001","severity":"IMPORTANT","question":"Should the greeting be localized?"}]}' ;;
-  *"The user answered your questions"*)
-    envelope '{"context_summary":"# Context\nA tiny repo, no localization.","gaps":[]}' ;;
-  *"Write the specification"*)
-    printf '# Spec\n\n- FR-001: greet the user by name.\n- AC-001: greet("x") returns "hello x".\n' > .featurebandit/spec.md
-    envelope '' ;;
-  *"independent reviewer. You did not write this specification"*)
-    if [ -n "$FAKE_SPEC_FAIL" ] && [ ! -f .featurebandit/.specfailed ]; then
-      touch .featurebandit/.specfailed
-      envelope '{"status":"FAIL","findings":[{"id":"SPEC-001","severity":"BLOCKING","requirement":"FR-001","type":"ambiguity","message":"FR-001 does not say what happens for an empty name."}]}'
-    else
-      envelope '{"status":"PASS","findings":[]}'
-    fi ;;
-  *"Fix the specification"*)
-    printf '# Spec\n\n- FR-001: greet the user by name.\n- FR-002: empty name is rejected.\n' > .featurebandit/spec.md
-    envelope '' ;;
-  *"Write the implementation plan"*)
-    printf '# Plan\n\n1. Add greet().\n' > .featurebandit/plan.md
-    envelope '{"tasks":[{"id":"TASK-001","title":"Add greet","covers":["FR-001","AC-001"],"files":["greet.sh"],"steps":["write test","implement"],"status":"pending"}]}' ;;
-  *"implementation plan. You did not write it"*)
-    envelope '{"status":"PASS","findings":[]}' ;;
-  *"Implement one task"*)
-    printf 'greet() { echo "hello $1"; }\n' > greet.sh
-    envelope '{"status":"DONE","detail":"added greet.sh"}' ;;
-  *"verification gate for stage"*)
-    touch fixed
-    envelope '' ;;
-  *"satisfies the approved specification"*)
-    envelope '{"status":"PASS","requirements":{"FR-001":"PASS","AC-001":"PASS"},"findings":[]}' ;;
-  *"Review this change adversarially"*)
-    envelope '{"status":"PASS","findings":[{"id":"CR-001","severity":"NIT","message":"quoting could be tighter"}]}' ;;
-  *"Simplify the change"*)
-    envelope '' ;;
-  *"security review of the change"*)
-    envelope '{"status":"PASS","findings":[]}' ;;
-  *"Final acceptance"*)
-    envelope '{"status":"PASS","summary":"Feature delivered: greet() implemented and tested."}' ;;
+  *"pr-review-toolkit:"*)
+    agent=$(printf '%s' "$prompt" | sed -nE 's/.*subagent_type "pr-review-toolkit:([a-z-]+)".*/\1/p' | head -1)
+    result "Report from $agent: no blocking issues found in the diff." ;;
+  *"code-simplifier:code-simplifier"*)
+    result "Simplifier: renamed one local; no behaviour change." ;;
+  "/security-review"*)
+    result "Security review: no vulnerabilities reachable in this change." ;;
+  "/superpowers:test-driven-development"*)
+    printf '# reviewed\n' >> greet.sh
+    result "TDD skill loaded. Applied the findings with a covering test." ;;
+  "/superpowers:systematic-debugging"*)
+    : > fixed
+    result "Systematic debugging loaded. Fixed the failing check." ;;
   *)
     echo "fake claude: unmatched prompt" >&2; exit 1 ;;
 esac

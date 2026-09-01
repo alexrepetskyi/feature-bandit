@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Stand-in for gum in the FeatureBandit tests, so the interactive path can be
+# exercised without a terminal. Answers come from a queue file, one per line:
+#   FAKE_GUM_QUEUE   path to the queue; each line is a prefix of the label to
+#                    pick, or __CANCEL__ (exit 130) or __FAIL__ (exit 1)
+#   FAKE_GUM_LOG     append one line per invocation
+
+cmd="$1"; shift
+[ -n "$FAKE_GUM_LOG" ] && printf '%s %s\n' "$cmd" "$*" >> "$FAKE_GUM_LOG"
+
+next_answer() {
+  local answer rest
+  [ -s "$FAKE_GUM_QUEUE" ] || { echo "fake gum: queue empty" >&2; exit 1; }
+  answer=$(head -1 "$FAKE_GUM_QUEUE")
+  rest=$(tail -n +2 "$FAKE_GUM_QUEUE")
+  printf '%s\n' "$rest" > "$FAKE_GUM_QUEUE"
+  printf '%s' "$answer"
+}
+
+case "$cmd" in
+  choose)
+    # keep only the option arguments: flags and their values are dropped
+    opts=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --header|--height|--selected|--cursor|--limit) shift 2 ;;
+        --*=*) shift ;;
+        --*) shift ;;
+        *) opts+=("$1"); shift ;;
+      esac
+    done
+    want=$(next_answer)
+    case "$want" in
+      __CANCEL__) exit 130 ;;
+      __FAIL__)   echo "fake gum: forced failure" >&2; exit 1 ;;
+    esac
+    for o in "${opts[@]}"; do
+      case "$o" in "$want"*) printf '%s\n' "$o"; exit 0 ;; esac
+    done
+    echo "fake gum: no option starting with \"$want\"" >&2
+    exit 1 ;;
+  confirm)
+    want=$(next_answer)
+    case "$want" in
+      __CANCEL__) exit 130 ;;
+      yes|y) exit 0 ;;
+      *) exit 1 ;;
+    esac ;;
+  input)
+    want=$(next_answer)
+    case "$want" in
+      __CANCEL__) exit 130 ;;
+      __EMPTY__)  printf '\n'; exit 0 ;;
+    esac
+    printf '%s\n' "$want"; exit 0 ;;
+  style)
+    # gum style prints its text; colour is dropped without a terminal anyway
+    while [ $# -gt 0 ]; do case "$1" in --*) shift ;; *) printf '%s\n' "$1"; shift ;; esac; done
+    exit 0 ;;
+  --version) echo "gum version 2.0.0 (fake)"; exit 0 ;;
+  *) exit 0 ;;
+esac

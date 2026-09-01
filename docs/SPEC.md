@@ -1,459 +1,580 @@
-# FeatureBandit V1 — Technical Specification
+# FeatureBandit — Technical Specification
 
-FeatureBandit is a cross-platform, terminal-based AI feature development orchestrator: a small set of portable shell scripts around the Claude Code CLI and existing Claude plugins.
+FeatureBandit is a plugin-first feature orchestrator: a small set of portable
+shell scripts that drive **existing, maintained tools** through one deterministic
+sequence, on one git branch, with resume.
 
-> Take one feature from raw requirements to validated implementation through a deterministic sequence of AI-assisted stages, with interactive approval gates and resume support.
+It invents no methodology of its own. Every engineering decision — what the
+specification says, how the work is broken down, how the code is written,
+reviewed, simplified and security-checked — belongs to a tool that already owns
+that job. FeatureBandit owns git, state, approvals, running commands,
+verification and resume. Nothing else.
 
-It is **not** a generic agent platform, workflow engine, CI/CD system, or multi-feature manager.
-
----
-
-## 1. Verified Environment Facts
-
-These mechanisms were inspected against a real Claude Code installation (v2.1.252) and are the only integration points FeatureBandit uses. No custom runtime, no SDK, no API calls.
-
-### 1.1 Headless invocation
-
-Every AI stage is a fresh `claude -p` (print mode) call:
-
-```bash
-claude -p "<prompt>" \
-  --output-format json \          # single JSON result envelope (includes session_id, structured_output)
-  --json-schema '<schema>' \      # structured output validated against a JSON Schema
-  --permission-mode acceptEdits \ # write stages only; review stages use default mode
-  --allowedTools "..."            # constrain tools per stage
-```
-
-- `--output-format json` returns a JSON envelope; with `--json-schema` the validated answer is the already-parsed object in `.structured_output` (`.result` holds the same JSON as a string — always read `.structured_output`).
-- `--json-schema` gives schema-validated structured output — used for all review verdicts (spec review, plan review, compliance, code review, security review, final acceptance).
-- Review stages run in default permission mode with read-only tools: `--allowedTools "Read Grep Glob Bash(git diff:*) Bash(git log:*)"`. `bypassPermissions` is never used.
-- There is no `--max-turns` in the current CLI; runaway calls are bounded by `timeout` (the shell utility) around the `claude` call, generous per-stage limits.
-- `--resume <session_id> -p "<answer>"` continues a prior session — used to feed user answers back into the requirements-clarification session without losing its repository context.
-- Skill invocation in print mode: a slash command expands **only when the prompt starts with it**, one command per call (`claude -p "/code-review <args>"`). A skill named mid-prompt is plain text; for the model to invoke it itself, `Skill` must be in `--allowedTools`. Stage prompts therefore either start with the slash command or explicitly allow the `Skill` tool.
-
-### 1.2 Plugin detection (supported mechanism)
-
-```bash
-claude plugin list --json
-```
-
-Returns a JSON array of installed plugins:
-
-```json
-{
-  "id": "code-simplifier@claude-plugins-official",
-  "version": "1.0.0",
-  "scope": "user",
-  "enabled": true,
-  "installPath": "..."
-}
-```
-
-Detection = plugin `id` matches `<name>@<any-marketplace>` and `enabled == true`. Match on plugin *name* only (e.g. superpowers may come from `superpowers-dev` or `claude-plugins-official`).
-
-### 1.3 Plugin installation (supported mechanism)
-
-```bash
-claude plugin install <name>@claude-plugins-official --scope user
-```
-
-Exactly three plugins are required (verified: `/code-review` and `/security-review` are built into Claude Code itself and need no plugin):
-
-| Capability            | Plugin id                                  |
-|-----------------------|--------------------------------------------|
-| Repo discovery / requirements | `feature-dev@claude-plugins-official` |
-| Brainstorm / plan / execute   | `superpowers@claude-plugins-official` (any marketplace accepted) |
-| Simplification                | `code-simplifier@claude-plugins-official` |
-
-If `claude-plugins-official` is not a configured marketplace, print instructions and stop (adding marketplaces on the user's behalf is out of scope for auto-install; offer the exact `claude plugin marketplace add` command).
+It is **not** an agent platform, workflow engine, CI system or multi-feature
+manager.
 
 ---
 
-## 2. Architecture
+## 1. The stack
 
-**Principle: the shell makes workflow decisions; Claude makes engineering decisions.**
+| Concern | Tool | Invocation |
+|---|---|---|
+| Spec-driven workflow | [GitHub Spec Kit](https://github.com/github/spec-kit) | `/speckit-specify`, `-clarify`, `-checklist`, `-plan`, `-tasks`, `-analyze`, `-implement`, `-converge` |
+| Implementation discipline | [Superpowers](https://github.com/obra/superpowers) | `/superpowers:test-driven-development`, `/superpowers:systematic-debugging` |
+| Code review | PR Review Toolkit (`claude-plugins-official`) | agents `code-reviewer`, `pr-test-analyzer`, `silent-failure-hunter`, `type-design-analyzer`, `comment-analyzer` |
+| Simplification | Code Simplifier (`claude-plugins-official`) | agent `code-simplifier` |
+| Security | Claude Code built-in | `/security-review` |
+| Terminal interface | [Charmbracelet Gum](https://github.com/charmbracelet/gum) | `gum choose`, `gum confirm`, `gum input`, `gum style` |
+
+Deliberately **not** used: `feature-dev`; the `code-review` plugin (its command
+is built around a GitHub PR, not a local branch); GSD, BMAD, Ralph and other
+orchestration frameworks; any home-grown review prompt, severity scale or
+convergence protocol that duplicates one of the tools above.
+
+Superpowers is used for implementation discipline only. Brainstorming, planning
+and workflow control belong to Spec Kit. Gum is used for presentation only: it
+never touches pipeline state, git or exit codes.
+
+---
+
+## 2. Verified integration points
+
+Every mechanism below was exercised against the real tools — Claude Code
+2.1.257, Spec Kit 1.0.3, PR Review Toolkit and Code Simplifier from
+`claude-plugins-official`, Superpowers 5.0.7. No SDK, no API calls, no runtime
+of its own.
+
+`test/e2e.sh` re-checks what can be checked for free: the plugins are installed
+and enabled, every agent file the pipeline names exists, and a repository really
+has the Spec Kit layout (it initialises a throwaway one if this repository has
+none). `test/e2e.sh --dispatch` adds three real `claude -p` calls — one agent
+dispatch and both Superpowers skills. `test/e2e.sh --full` runs one complete
+real pipeline, every stage, in a throwaway repository; it costs real money and
+takes as long as building a small feature takes. The free run alone does **not**
+prove the pipeline end to end — only `--full` does.
+
+### 2.1 Headless invocation
+
+```bash
+claude -p "<prompt>" --output-format json --allowedTools "..." [--permission-mode acceptEdits] [--resume <id>]
+```
+
+- A slash command expands in print mode **only when the prompt starts with it**,
+  one per call; `$ARGUMENTS` is everything after it. Verified.
+- `--output-format json` returns one envelope: `.type == "result"`, `.is_error`,
+  `.result` (text), `.session_id`.
+- `--resume <session_id> -p "<text>"` continues a session. This is the only way
+  to answer an interactive command headlessly.
+- A subagent is dispatched by asking the session to call the `Agent` tool with
+  `subagent_type: "<plugin>:<agent>"`, with `Agent` in `--allowedTools`.
+  Verified for `pr-review-toolkit:code-reviewer` — the namespace matters, because
+  `feature-dev` and `superpowers` each ship an agent also called `code-reviewer`.
+- A skill is invoked as a slash command: `/superpowers:systematic-debugging <text>`
+  answers "Systematic debugging is loaded". Verified for both Superpowers skills
+  the pipeline uses, so the skill demonstrably loads instead of being named in
+  prose and hoped for.
+- **No structured output is requested anywhere.** None of these tools publishes a
+  JSON contract, and inventing one via `--json-schema` would mean FeatureBandit
+  re-deciding what the tool already decided.
+
+### 2.2 How Spec Kit is spelled
+
+`specify init --integration claude` installs Spec Kit **as skills**, not as
+slash-command files — its own help says "Claude installs skills by default". The
+result is `.claude/skills/speckit-<name>/SKILL.md`, invoked `/speckit-specify`
+(hyphen). Older or non-default installs use `.claude/commands/speckit.<name>.md`,
+invoked `/speckit.specify` (dot).
+
+FeatureBandit detects which of the two is on disk and uses that spelling. It
+never guesses the separator, and it refuses to start unless all eight commands
+it drives are present.
+
+### 2.3 Dependency detection
+
+- Spec Kit: `.specify/` at the repository root plus the eight command or skill
+  files above.
+- Plugins: `claude plugin list --json`, matching the plugin name before `@` with
+  `.enabled == true`, any marketplace.
+- Gum: `command -v gum`, and only when there is a terminal to draw on. Verified
+  against gum 2.0.0: `gum choose` and `gum confirm` exit 1 with
+  `could not open TTY` when stdin is not a terminal, so a non-interactive run
+  never calls them and does not need gum installed. `gum style` works either
+  way and drops colour on its own when the output is redirected or `NO_COLOR`
+  is set.
+
+Nothing is installed behind the user's back. A missing dependency prints its
+exact official install command, and then offers to run that command — the same
+command, in the foreground, in full view:
+
+```bash
+brew install jq          # or apt-get / dnf / pacman, whichever this machine has
+brew install gum
+
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
+specify init --here --force --non-interactive --integration claude
+
+claude plugin install pr-review-toolkit@claude-plugins-official --scope user
+claude plugin install code-simplifier@claude-plugins-official --scope user
+claude plugin marketplace add https://github.com/obra/superpowers.git && \
+  claude plugin install superpowers@superpowers-dev --scope user
+```
+
+Declining is always an option and always stops the run; off a terminal the
+answer must come from `FEATUREBANDIT_CHOICES` like any other, or
+`FEATUREBANDIT_INSTALL=1` answers yes to all of them up front. Claude Code
+itself is never installed automatically: it needs a sign-in, so a missing
+`claude` prints the link and stops. Spec Kit scaffolding is committed straight
+away when the tree was clean beforehand — it belongs to the repository, not to a
+feature — and never when it was not.
+
+`install.sh` does the same for a fresh machine: it links `featurebandit` onto
+`PATH`, then offers each missing dependency in turn (`FEATUREBANDIT_YES=1`
+answers yes to all).
+
+### 2.4 What each tool guarantees
+
+| Tool | Machine-readable contract | Consequence |
+|---|---|---|
+| `speckit-specify` | writes `.specify/feature.json` → `feature_directory` | the feature directory is read from it, never guessed |
+| `speckit-clarify` | one question per turn, each prefixed `**Question:**`; ≤5 | the marker ends the loop, not a guess about the prose |
+| `speckit-checklist` | `- [ ] CHK###` / `- [x]` in `<feature>/checklists/*.md` | open items are counted and listed at the spec gate |
+| `speckit-tasks` / `speckit-implement` | `- [ ] T###` → `- [X] T###` in `tasks.md` | the batch and resume signal |
+| `speckit-converge` | append-only; `tasks.md` byte-identical ⇔ converged | compared with `git hash-object` |
+| `speckit-analyze` | none; read-only markdown report | user gate |
+| PR Review Toolkit agents | none; markdown reports | user gate |
+| `/security-review` | none; markdown report | user gate |
+
+**Where a tool publishes no machine-readable severity, FeatureBandit shows its
+output verbatim and asks.** It never parses prose to invent a status.
+
+### 2.5 Known incompatibilities
+
+1. `speckit-clarify` cannot run unattended. It asks one question per turn and
+   waits. FeatureBandit relays each turn to the terminal and feeds the answer
+   back with `--resume`, stopping when the output carries no `**Question:**`
+   line, when the user answers with nothing (which sends Spec Kit's documented
+   `done` signal), or at Spec Kit's own limit of five.
+2. `speckit-analyze`, the review agents and `/security-review` return prose.
+   Their findings are never auto-classified — every one of them ends in an
+   explicit approval gate.
+3. `speckit-implement` has no batch flag. The batch is expressed in
+   `$ARGUMENTS`; correctness does not depend on the model honouring it, because
+   progress is read from the `[X]` markers afterwards.
+4. Spec Kit is a Python CLI and needs `uv`. FeatureBandit will not install it.
+5. Spec Kit's core never changes the git branch, but its optional `git`
+   extension can. FeatureBandit therefore asserts the branch before and after
+   every plugin call rather than assuming it (§3, Git).
+6. `gum spin` renders a **static** title: it has no elapsed-time counter and no
+   way to update the title while the command runs. Since the pipeline must show
+   real elapsed seconds, the spinner and the counter are a small Bash timer
+   instead (§3, Terminal output). Gum keeps the menus, prompts and styling.
+
+---
+
+## 3. Architecture
 
 ```text
-featurebandit           # entry point (bash)
+featurebandit           # entry point: CLI, start/resume, pipeline loop
 lib/
-  common.sh             # ui helpers, prompts, claude call wrapper
-  bootstrap.sh          # preflight: claude + plugins
-  state.sh              # state.json read/write (jq)
-  stages.sh             # one function per pipeline stage
+  common.sh             # ui, the claude wrapper, git, verification gate
+  bootstrap.sh          # dependency checks, branch creation, verify config
+  state.sh              # state.json
+  stages.sh             # one function per stage
 ```
 
-(Fewer files are acceptable; more are not. No frameworks, DSLs, daemons, databases.)
+The shell owns transitions, git and exit codes. The plugins own the engineering
+and their own artifacts. There is no framework, daemon, database, background
+worker, plugin abstraction or DSL, and no adapter layer for tools that are not
+in §1.
 
-Each stage is:
+### Portability
 
-1. one or more fresh `claude -p` calls with a focused prompt and artifacts as input,
-2. a deterministic shell decision on the structured result,
-3. an interactive gate where the spec requires one,
-4. a state checkpoint written to `.featurebandit/state.json`.
+`bash`, `git`, `jq`, `claude`. Shebang `#!/usr/bin/env bash`. No GNU-only `sed
+-i`, `grep -P`, `readlink -f`, `realpath` or `/proc`. GNU `timeout` is absent on
+stock macOS, so a stage is bounded by a background watchdog process instead.
 
-Fresh contexts are mandatory for independent reviews (spec review, plan review, compliance, code review, security, final acceptance) — a reviewer never shares a session with the producer of the artifact it reviews.
+### Git
 
-### Portability rules
+- The tree must be clean before anything is touched.
+- A **new** branch is created off HEAD. `featurebandit/<slug>` is never reused:
+  a colliding name becomes `featurebandit/<slug>-2`, `-3`, … A title with no
+  ASCII letters (Cyrillic, CJK) gets `feature-<cksum>` so it is still unique.
+- **Branch invariant.** `git rev-parse --abbrev-ref HEAD` is compared with
+  `state.branch` at the top of every pipeline iteration and immediately after
+  every plugin call. A mismatch stops the run — state and commits must never
+  describe different branches.
+- `.featurebandit/` is added to the exclude file found via
+  `git rev-parse --git-path info/exclude`, which is correct in a linked worktree.
+- Review diffs are always `git diff <startCommit>...HEAD`.
+- **Every commit is atomic with the state it represents.** A batch commits the
+  code *and* the `[X]` markers in `tasks.md` together, so a Ctrl-C leaves no
+  window: either the commit exists and those tasks are done, or neither is true.
+- Rollback of an interrupted block is `git checkout -- .` **and**
+  `git clean -fd` — tracked edits and files the block created.
+- FeatureBandit never merges, never pushes, never stashes and never edits
+  `CLAUDE.md`. Project rules belong to Spec Kit's constitution.
 
-- Target `bash` on macOS, Linux, Git Bash, WSL. Shebang `#!/usr/bin/env bash`.
-- Dependencies: `bash`, `git`, `jq`, `claude`. Nothing else.
-- Forbidden: GNU-only `sed -i` semantics, `grep -P`, `readlink -f`, `realpath`, `/proc`, Linux-only process tools.
-- All JSON handling through `jq`. All paths relative to the repository root (`git rev-parse --show-toplevel`).
+### Failure policy
 
-### Git strategy
+Any failing `git`, `jq`, `mv`, state write or commit stops the run immediately.
+A checkpoint is never written after a failed commit or state write. State writes
+are atomic (`state.json.tmp` then `mv`).
 
-Git is the source of truth for code state; `state.json` only tracks workflow position.
+State reads are **fail closed**, which needs care in shell: a `$(...)` capture
+runs in a subshell, so an `exit` inside it would not stop the run. Therefore
+`fb_state_ok` validates `state.json` in the parent shell before every pipeline
+iteration, and `fb_load_state` reads every field in one `jq` call whose exit
+status is checked in the parent and cached in shell variables. Stages read those
+variables, not `state.json`.
 
-- **Start**: working tree must be clean (`git status --porcelain` empty). If not, print the dirty files and exit — FeatureBandit never stashes or commits user changes.
-- FeatureBandit creates and checks out `featurebandit/<feature-slug>` from the current HEAD; that HEAD is recorded as `start_commit` in `state.json`.
-- `.featurebandit/` is added to `.git/info/exclude` (not `.gitignore` — the repo's own files are never modified for bookkeeping).
-- **Commit per atomic block**: every code-modifying `claude -p` block (implementation task, any fix session, simplification) ends with `git add -A && git commit -m "featurebandit: <stage>: <what>"`. A committed block is done; an uncommitted tree means the block was interrupted.
-- **Resume with a dirty tree**: the last block was interrupted mid-write. Prompt once: `[d] Discard uncommitted changes and redo the block / [q] Quit`. Discard = `git checkout -- . && git clean -fd` (paths under the repo, `.featurebandit/` excluded). Blocks are only ever re-run from a clean tree.
-- **All review diffs** are `git diff <start_commit>...HEAD` — deterministic and free of unrelated changes by construction.
-- **Abort**: confirm, then check out the original branch (recorded in state) and offer to delete the feature branch. Code rollback is exactly branch deletion.
-- **DONE**: FeatureBandit never merges. It prints the branch name and summary; merging/PR is the user's job.
+Reaching the end of input at a menu is an error, not a default — the run stops
+rather than silently choosing.
 
-### Spec archive
+### The command runner
 
-`.featurebandit/` is transient, but approved specs are permanent repo knowledge:
+Every command — a Spec Kit call, an agent dispatch, a verification command —
+goes through one function, `fb_run`. It:
 
-- On final acceptance, `spec.md` (with the accepted risks/assumptions from `decisions.md` appended as a final section) is copied to `docs/specs/<feature-slug>.md` and committed on the feature branch as the last commit. Merging the feature merges its spec. Fixed path, no config.
-- Every later feature reads `docs/specs/*.md` as input: the requirements stage (§5.2) treats them as approved existing behavior, and the spec review (§5.3) checks the new spec for contradictions with them. A deliberate behavior change is not an error — it surfaces as a finding, and on approval the new spec states which prior spec (by file and FR id) it supersedes; old spec files are never rewritten.
+- writes stdout and stderr to two files beside each other, so a machine-readable
+  stdout stays parseable while stderr is still kept verbatim;
+- pipes nothing, so `$?` is the command's own exit code, preserved and reported;
+- writes to `<log>.partial` and `mv`s into place, so a log is either complete or
+  absent, and a failed `mkdir`, open or `mv` stops the stage;
+- times the call and reports `completed in 24s` or `failed after 24s · exit 1`;
+- starts the command in **its own process group** (`set -m`) with stdin on
+  `/dev/null`, and records that group. A Claude Code session is a process tree;
+  signalling only the shell that started it would leave the tree running. The
+  watchdog and the `EXIT`/`INT`/`TERM` traps therefore terminate the whole group
+  — `TERM`, one second, then `KILL`.
 
----
+Nothing is ever `eval`ed. Commands are passed as argument arrays. The single
+exception is documented: a verification command is a user-supplied shell
+expression, so it runs as `sh -c "<the line>"` in the repository root, in its
+own process — one explicit contract, not string-built commands everywhere.
 
-## 3. CLI
+### Verification gate
+
+Deterministic, in the shell, never AI. **At least one command is mandatory** —
+there is no path that continues without verification. Every command in every
+attempt gets its own log; nothing is overwritten.
+
+Detection is a fixed table, confirmed by the user:
+
+| Marker | Test | Lint |
+|---|---|---|
+| `package.json` | `npm test` | `npm run lint` |
+| `pyproject.toml` / `pytest.ini` | `pytest` | `ruff check .` |
+| `go.mod` | `go test ./...` | `go vet ./...` |
+| `Cargo.toml` | `cargo test` | `cargo clippy -- -D warnings` |
+| `Makefile` | `make test` | `make lint` |
+
+A failing command opens a `/superpowers:systematic-debugging` session, bounded to
+three rounds, then hands the choice to the user (retry / shell out / stop).
+
+The **final** verification, in the `done` stage, is the one gate that can still
+change code. If it passes, the feature is finished. If it fails and the
+debugging session then changes something that gets committed, that code has
+never been reviewed, simplified, security-checked or converged: the `review`,
+`simplify`, `security` and `converge` checkpoints are cleared and the pipeline
+goes back through them. Nothing is declared finished on the strength of a fix
+nobody reviewed.
+
+### Retrying a failed call
+
+A **read** call — a review agent, `/security-review` — writes nothing, so it is
+retried once automatically and then handed to the user.
+
+A **write** call is never retried automatically. `speckit.specify`, `.tasks`,
+`.implement`, Code Simplifier and the TDD and debugging sessions can all have
+edited files, run scripts or half-finished their work before failing; rerunning
+one on FeatureBandit's initiative could duplicate or continue that partial work.
+The failure is shown and the user chooses: stop (the default — resume redoes the
+block from the last checkpoint), discard every uncommitted change and retry, or
+retry keeping what was already written.
+
+### Terminal output
+
+`lib/ui.sh` holds every rendering decision and nothing else: it never touches
+state, git or exit codes. Its whole surface is `ui_stage_start`,
+`ui_stage_summary`, `ui_pipeline`, `ui_step_start`, `ui_step_success`,
+`ui_step_failure`, `ui_block`, `ui_output`, `ui_info`, `ui_warning`,
+`ui_error`, `ui_command`, `ui_detail`, `ui_gate`, `ui_confirm` and `ui_prompt`.
+
+**Interactive or not.** Interactive means `TERM` is not `dumb`, both stdout and
+stderr are terminals, and `CI` is unset; `FEATUREBANDIT_TTY=1|0` forces it
+either way. `NO_COLOR` drops colour but leaves the interactive behaviour alone.
+
+|  | interactive | not interactive |
+|---|---|---|
+| menus | `gum choose` — arrow keys, highlighted option, Enter takes the first (safe) one | the options are printed and the answer comes from `FEATUREBANDIT_CHOICES` |
+| yes/no | `gum confirm`, defaulting to no | same, from `FEATUREBANDIT_CHOICES` |
+| free text | `gum input` | one line read from stdin |
+| progress | spinner glyph and elapsed seconds, repainted in place on stderr | one plain line at the start, then a line every 15s; no cursor movement at all |
+| colour | semantic | none |
+
+**Colour and symbols.** Cyan for stages and running steps, green for success,
+yellow for warnings and anything awaiting a decision, red for failure, dim grey
+for commands, paths and technical detail, and no colour at all for plugin
+output — a report is shown exactly as the plugin wrote it. Symbols are `◆`
+stage, `→` running, `✓` done, `✗` failed, `!` warning, `?` your decision, `•`
+detail, with an ASCII fallback when the locale is not UTF-8.
+
+**Approvals fail closed.** Off a terminal, an approval that was not passed in
+advance is not an approval: the run stops and says which variable to set, rather
+than hanging or assuming. `FEATUREBANDIT_CHOICES` is a comma-separated list of
+option letters, consumed in order:
 
 ```bash
-featurebandit                    # interactive start, or resume if unfinished feature exists
-featurebandit requirements.md    # start from a file
-featurebandit "Add RBAC support" # start from text
-featurebandit resume             # resume explicitly
-featurebandit status             # print stage checklist, exit
-featurebandit abort              # abort current feature (confirm, reset state, back to original branch — §2)
+FEATUREBANDIT_CHOICES=a,a,c,a,a,a featurebandit "Add a health endpoint" < answers.txt
 ```
 
-No other commands. An argument that is an existing readable file is treated as a requirements file; otherwise as requirement text; no argument → interactive prompt:
+Gum's exit code is always checked. A cancelled selection (Ctrl-C or Esc) is
+never read as a choice — it stops the stage. `gum confirm` answers 0 for yes and
+1 for no; any other exit is gum failing, not the user saying no, and is reported
+as the error it is.
 
-```text
-FeatureBandit
+**The first option is never an approval.** Enter takes the first option, so no
+menu offers approval there: the review and security gates lead with *fix and
+review again*, the compliance-gap gate with *stop here*, and the specification
+and plan gates with *view it*. Accepting findings unfixed, accepting a
+compliance gap and approving an artifact are all deliberate selections. A gate
+that accepts findings unfixed records which report was accepted, and the final
+summary lists exactly those — a report that was fixed, or that the user marked
+as having nothing to fix, is not listed.
 
-What feature do you want to build?
+**Elapsed time, never a percentage.** How much work a plugin or an AI session
+has left is unknowable, so a percentage or a progress bar would be decoration
+that misleads. What is shown is real elapsed seconds, updated once a second,
+measured with bash's `SECONDS` — the most reliable clock portable bash offers.
+Status lines and the timer go to **stderr**; captured output goes to its log.
 
->
-```
-
-If an unfinished feature exists and new requirements are given:
-
-```text
-Existing unfinished feature found:
-
-RBAC Support
-Current stage: Code Review
-
-[r] Resume existing feature
-[a] Abort existing feature and start new one
-[q] Quit
-```
+**Nothing is left running.** The timer is a single background process whose PID
+is recorded; it is torn down by `ui_timer_stop` at the end of every step and by
+an `EXIT`/`INT`/`TERM` trap. The watchdog that bounds a long call sleeps one
+second at a time and exits as soon as its target does, so killing it can never
+orphan a long `sleep`. The command itself runs in its own process group, and
+both the watchdog and the traps end that whole group, so a Ctrl-C during a long
+Claude Code call leaves no `claude` and no child of one behind.
 
 ---
 
-## 4. State and Artifacts
-
-Everything lives in `.featurebandit/` at the repository root. Exactly one active feature per repository.
+## 4. State
 
 ```text
 .featurebandit/
-├── state.json               # the only workflow state
-├── config                   # optional: VERIFY_COMMAND_N lines
-├── guide.md                 # language-agnostic engineering guide (installed by bootstrap)
-├── requirements.md          # original raw requirements (preserved verbatim)
-├── context.md               # repository discovery summary
-├── decisions.md             # user answers + accepted assumptions/risks
-├── spec.md                  # approved specification (source of truth)
-├── spec-review.json         # last spec review verdict
-├── plan.md                  # implementation plan
-├── plan-review.json         # last plan review verdict
-├── tasks.json               # plan tasks with status
-├── compliance-review.json
-├── code-review.json
-├── security-review.json
-└── final-review.json
+├── state.json          # the only workflow state
+├── config              # VERIFY_COMMAND_N
+├── requirements.md     # raw input, verbatim
+├── diff.patch          # startCommit...HEAD, regenerated per review
+├── *.md                # the verbatim text each tool reported
+└── logs/<feature>/
+    ├── specification/  clarify-01.log  specify-01.log  specify-01.log.err …
+    ├── plan/
+    ├── implementation/
+    ├── review/
+    ├── simplification/
+    ├── security/
+    ├── compliance/
+    └── verification/   implementation-01.log  implementation-02.log …
 ```
 
-### state.json
+Log names are deterministic — stage directory, block name, and a two-digit
+attempt that never reuses a number, with the task ids in the name for an
+implementation batch. Logs are never committed: `.featurebandit/` is in the
+repository's exclude file. Environment variables and secrets are never written
+to a log; only the command's own output is.
+
+The UI reads this state and adds none of its own: stage status comes from
+`checkpoints`, and a stage's measured duration is written into `durations` in
+the same atomic write as its checkpoint.
+
+Everything about the feature itself lives where Spec Kit puts it:
+`specs/<NNN-slug>/{spec.md,plan.md,tasks.md,checklists/}`, committed on the
+branch. That is the archive — merging the feature merges its specification, and
+the next feature reads it as existing behaviour through Spec Kit.
 
 ```json
 {
-  "feature": "rbac-support",
-  "title": "RBAC Support",
-  "stage": "code_review",
+  "title": "Add greeting",
+  "slug": "add-greeting",
+  "branch": "featurebandit/add-greeting",
   "startCommit": "abc1234",
   "originalBranch": "main",
+  "featureDir": "specs/001-add-greeting",
+  "stage": "review",
+  "convergeRounds": 0,
   "checkpoints": {
-    "requirements_approved": true,
-    "spec_approved": true,
-    "plan_approved": true,
-    "implementation_complete": true,
-    "compliance_review_complete": true,
-    "code_review_complete": false,
-    "simplification_complete": false,
-    "security_review_complete": false,
-    "final_acceptance_complete": false
-  },
-  "acceptedRisks": []
+    "specify": true, "plan": true, "implement": true,
+    "review": false, "simplify": false, "security": false,
+    "converge": false, "done": false
+  }
 }
 ```
 
-Writes are atomic: write to `state.json.tmp`, then `mv` over `state.json` (rename is atomic enough on all target platforms for a single-terminal tool).
+Resume starts at the first checkpoint that is false. Within implementation,
+resume is per batch and comes from `tasks.md`, not from `state.json`: an already
+implemented task is `[X]` in the commit and `speckit-implement` skips it.
 
-### Resume
+---
 
-On start, if `state.json` exists and `final_acceptance_complete` is false, resume at the first checkpoint that is false, in pipeline order. Completed stages are never regenerated. `featurebandit status` renders:
+## 5. Pipeline
 
 ```text
-✓ Requirements
-✓ Specification
-✓ Plan
-✓ Implementation
-✓ Spec Compliance
-→ Code Review
-○ Simplification
-○ Security
-○ Final
+specification → plan → implementation → review → simplification → security
+              → compliance ─┐
+                            └─ if converge appended tasks: implement them, then
+                               review, simplify and secure them too
 ```
 
-Sub-stage granularity for resume exists in exactly one place: implementation task status in `tasks.json` (`pending` / `done`), so an interrupted implementation resumes at the first pending task.
+Compliance runs **last** on purpose. Review, simplification and security all
+change code, so whether the result still satisfies the specification can only be
+decided on what is actually going to be merged.
+
+### 5.1 Bootstrap (every run, not persisted)
+
+`git`, `jq`, `claude`, Spec Kit (layout and all eight commands), the three
+plugins — each missing one offered for installation, then rechecked; clean tree;
+new unique branch off HEAD; `.featurebandit/` excluded; verification commands
+configured. Starting a new feature after a finished one resets
+`.featurebandit/`, verification commands included: the next feature is not
+silently checked with the last one's commands.
+
+### 5.2 Specification → `specify`
+
+1. `speckit-specify <raw requirements>`.
+2. Read `feature_directory` from `.specify/feature.json`.
+3. Clarification loop: relay each `**Question:**` turn, answer via `--resume`.
+4. `speckit-checklist completeness, unambiguous requirements, testable
+   acceptance criteria, failure behaviour, permissions and validation`.
+5. **Spec gate.** Open checklist items are counted and listed. Approve, view the
+   spec, or clarify further and recheck. The checklist existing is not the same
+   as the checklist passing, and FeatureBandit does not judge the items itself.
+6. Commit the artifacts.
+
+### 5.3 Plan → `plan`
+
+1. `speckit-plan`, `speckit-tasks`, commit.
+2. `speckit-analyze`, output shown verbatim.
+3. Each finding goes back to the artefact that owns it: clarify the
+   specification and replan, rerun plan and tasks, or rerun tasks only.
+   **`speckit-specify` is never re-run** — that would create a second feature
+   directory instead of correcting the current specification.
+4. **Plan gate.**
+
+### 5.4 Implementation → `implement`
+
+Repeat while `tasks.md` has unchecked tasks:
+
+1. `speckit-implement` naming the next three task ids. Test-first ordering is
+   Spec Kit's own contract: `speckit-tasks` emits the test task before the
+   implementation task and `speckit-implement` executes them in order.
+2. Verification gate in a plain shell.
+3. One commit: code + `tasks.md` markers.
+4. If no marker changed, stop and ask — never loop silently.
+
+### 5.5 Review → `review`
+
+PR Review Toolkit agents over `diff.patch`, always `code-reviewer`,
+`pr-test-analyzer`, `silent-failure-hunter`, plus:
+
+- `type-design-analyzer` when the diff adds type declarations,
+- `comment-analyzer` when the diff adds or removes comment or documentation lines.
+
+Each report is shown verbatim and saved. The blocking policy is deterministic and
+belongs to the user, in four explicit choices: fix (a
+`/superpowers:test-driven-development` session over the reports, then
+verification and a commit — bounded to three rounds), stop and look at them,
+nothing to fix in this report, or accept the open findings unfixed. Only the last
+one is recorded as an accepted finding, and only it appears in the final summary.
+Fixing is the first option, so Enter never accepts anything.
+
+### 5.6 Simplification → `simplify`
+
+`code-simplifier:code-simplifier`, scoped to the files the diff changes, no
+behaviour change, then verification and a commit.
+
+### 5.7 Security → `security`
+
+Built-in `/security-review`. Same gate as §5.5.
+
+### 5.8 Compliance → `converge`
+
+1. Verification.
+2. `speckit-converge`. `tasks.md` unchanged ⇒ converged, checkpoint.
+3. Otherwise: commit the appended tasks, implement them (§5.4), verify, then
+   clear the review, simplification and security checkpoints so the new code
+   gets the same treatment the rest did, and re-enter the pipeline at review.
+4. After `convergeRounds` reaches 3 the user decides: accept the remaining gap,
+   go round again, or stop.
+
+### 5.9 Done → `done`
+
+Final verification, then the summary: branch, commits, verification commands, the
+specification path, and the reports whose findings the user chose to accept
+rather than fix — exactly those, and `none` when there were none. There is **no
+separate AI final acceptance** — converge, the review agents, the security
+review and the tests already cover it. Nothing is merged or pushed.
+
+If the final verification fails, the fix that makes it pass is code nobody has
+reviewed, so `review`, `simplify`, `security` and `converge` are reopened and
+run again before the feature can finish.
 
 ---
 
-## 5. Pipeline Stages
+## 6. CLI
 
-Ordered checkpoints (each is atomic; state is written immediately after it passes):
-
-```text
-bootstrap (not persisted — runs every start)
-requirements_approved
-spec_approved
-plan_approved
-implementation_complete        (includes deterministic verification)
-compliance_review_complete
-code_review_complete
-simplification_complete       (includes deterministic re-verification)
-security_review_complete
-final_acceptance_complete → DONE
+```bash
+featurebandit                     # interactive start, or resume
+featurebandit requirements.md     # start from a file
+featurebandit "Add RBAC support"  # start from text
+featurebandit resume
+featurebandit status
+featurebandit abort
 ```
 
-### 5.1 Bootstrap
-
-1. `command -v claude` — if missing, print install message and exit 1. No fallback provider.
-2. `command -v jq`, `command -v git` — same treatment.
-3. Working directory must be inside a git repository. On a new feature start, run the git preflight (§2 Git strategy): clean tree, create feature branch, record `startCommit`/`originalBranch`, exclude `.featurebandit/`.
-4. `claude plugin list --json` → check the three required plugins (§1.2). Print the ✓/✗ table.
-5. If any missing: `Install them automatically? [Y/n]` → `claude plugin install <id>` per missing plugin → recheck once. Any failure: print the failing plugin and exit 1.
-
-Bootstrap runs on every invocation (cheap, idempotent, no state).
-
-**Project conventions setup** (also part of bootstrap, idempotent):
-
-6. Install the model configuration into the target repository's `CLAUDE.md` (repo root):
-   - The rules live between markers so the step is idempotent and user content is never touched:
-
-     ```markdown
-     <!-- featurebandit:rules:start -->
-     # Engineering style (FeatureBandit)
-     - Be sharp and direct: facts, conclusions, code. No thinking out loud.
-     - Build exactly what was asked. Nothing extra "for the future". YAGNI.
-     - Prefer the smallest working solution; no abstractions or config options for hypothetical requirements.
-     - No error handling, logging, retries, or validation beyond what the task needs.
-     - Don't refactor surrounding code unless asked. Reuse what exists before writing new code.
-     - Follow the engineering guide in .featurebandit/guide.md.
-     <!-- featurebandit:rules:end -->
-     ```
-
-   - No `CLAUDE.md` → create it with the block. `CLAUDE.md` exists without markers → append the block. Markers present → replace block content (upgrades ship rule updates). Implementation: plain `grep` for the marker + append/rewrite; no templating.
-7. Install `.featurebandit/guide.md` — a short language-agnostic engineering guide shipped with FeatureBandit (copied verbatim, overwritten on version change). Every stage prompt references it. There is no single industry-wide cross-language style standard, so the guide distills the universal ones and defers language specifics to the repo's own linters/formatters:
-   - naming: intention-revealing names, no abbreviations, consistency with the surrounding code;
-   - functions/modules: small, single responsibility, shallow nesting, early returns;
-   - errors: fail fast, no swallowed exceptions, actionable messages;
-   - tests: test behavior not implementation, one assertion focus per test, cover the failure path;
-   - structure: files that change together live together; follow the repo's existing layout, don't invent a new one;
-   - comments: only for what the code cannot say (constraints, invariants), never narration;
-   - formatting: whatever the repo's formatter/linter says wins; if none, match existing files.
-8. Verification gate setup: if `.featurebandit/config` has no `VERIFY_COMMAND_N` lines, run detection (§5.5), confirm with the user, write the config.
-
-### 5.2 Requirements → `requirements_approved`
-
-1. Persist raw input verbatim to `.featurebandit/requirements.md`.
-2. Fresh `claude -p` session invoking `/feature-dev:feature-dev` exploration behavior: read requirements, read prior specs in `docs/specs/` (approved existing behavior — §2 Spec archive), inspect the repository, locate relevant code, conventions, tests. Output constrained by `--json-schema`:
-
-```json
-{
-  "context_summary": "markdown",
-  "gaps": [
-    { "id": "GAP-001", "severity": "BLOCKING|IMPORTANT|OPTIONAL", "question": "..." }
-  ]
-}
-```
-
-3. Write `context.md`. For each gap, in severity order, ask the user in the terminal. BLOCKING gaps require an answer; IMPORTANT/OPTIONAL may be skipped (skip = "use your best judgment", recorded as an accepted assumption).
-4. Feed answers back with `claude --resume <session_id> -p` so the clarifier keeps its repository context; repeat until no new BLOCKING gaps (max 2 clarification rounds, then remaining gaps become findings for the spec stage).
-5. Persist Q&A to `decisions.md`. Answered questions are never re-asked (decisions.md is input to every later stage).
-6. Checkpoint `requirements_approved`.
-
-No implementation happens here.
-
-### 5.3 Specification → `spec_approved`
-
-1. Fresh session with `requirements.md` + `context.md` + `decisions.md`, invoking Superpowers brainstorming/design guidance to produce a concise `spec.md` with stable IDs (`FR-nnn`, `AC-nnn`) and only relevant sections (functional requirements, acceptance criteria, failure behavior, permissions/validation, non-goals, explicit assumptions — omit what doesn't apply).
-2. **Independent spec review** — fresh session, input is spec + requirements + decisions, output via `--json-schema`:
-
-```json
-{
-  "status": "PASS|FAIL|NEEDS_USER_INPUT",
-  "findings": [
-    { "id": "SPEC-001", "severity": "BLOCKING|HIGH|MEDIUM|LOW",
-      "requirement": "FR-002", "type": "ambiguity", "message": "..." }
-  ]
-}
-```
-
-Reviewer checks: completeness, ambiguity, contradictions, untestable requirements, missing edge cases / failure behavior / authorization expectations, data consistency, security concerns, backward compatibility, scope ambiguity, and contradictions with prior specs in `docs/specs/` (§2 Spec archive — deliberate supersession must be stated in the new spec, silent conflict is a finding).
-
-3. Interactive loop on `FAIL` or `NEEDS_USER_INPUT`:
-
-```text
-[f] Fix findings      → fix session updates spec.md → fresh review
-[a] Accept findings   → recorded in decisions.md as accepted risks
-[c] Continue anyway   → recorded as accepted risks
-[q] Abort
-```
-
-Loop until PASS or user accepts/continues. Persist last verdict to `spec-review.json`. Checkpoint `spec_approved`.
-
-### 5.4 Plan → `plan_approved`
-
-1. Fresh session using Superpowers writing-plans guidance; input spec + context. Produces `plan.md` and `tasks.json`:
-
-```json
-{
-  "tasks": [
-    { "id": "TASK-001", "title": "...", "covers": ["FR-001", "AC-001"],
-      "files": ["src/..."], "steps": ["..."], "status": "pending" }
-  ]
-}
-```
-
-Small tasks, each mapped to FR/AC IDs.
-
-2. **Independent plan review** — fresh session; core question: *"If this plan is executed exactly as written, will the approved specification be fully implemented?"* Same verdict schema as spec review plus a traceability map (`FR/AC → TASK`); unmapped requirements are findings.
-3. Same `[f]/[a]/[c]/[q]` loop. Persist `plan-review.json`. Checkpoint `plan_approved`.
-
-### 5.5 Implementation → `implementation_complete`
-
-For each pending task in `tasks.json`, in order:
-
-1. Fresh `claude -p` session with `--permission-mode acceptEdits`: task definition + spec excerpt + decisions. Loop inside the session: understand → write/update tests → implement → verify. Superpowers execution skills are referenced in the prompt; where Superpowers dispatches its own subagents, that is reused, not rebuilt.
-2. On task success, commit (§2 Git strategy) and mark `status: "done"` in `tasks.json` (this is the implementation resume point; an uncommitted tree on resume means the task was interrupted — see §2).
-
-Rules:
-- Implementation must not redefine the spec. The task prompt instructs: if a genuine spec problem is exposed, stop and report `{"status": "SPEC_PROBLEM", "detail": ...}` — FeatureBandit then returns the user to the spec stage (clears `spec_approved`, `plan_approved`) instead of inventing behavior.
-
-**Deterministic verification gate** (shell, not AI): lint + tests. This is the step that actually executes the tests the LLM wrote during TDD — a test that only ever ran inside an AI session doesn't count; it must pass here, in a plain shell, or the stage doesn't checkpoint.
-
-Commands come from `.featurebandit/config` (`VERIFY_COMMAND_N` lines, run in order). If no config exists, detect once during bootstrap by project markers — the subtle part is that every language has its own tooling, so detection is a small fixed table, never guesswork:
-
-| Marker (repo root)           | Test command        | Lint command (if configured)      |
-|------------------------------|---------------------|-----------------------------------|
-| `package.json`               | `npm test`          | `npm run lint` (script exists)    |
-| `pyproject.toml` / `pytest.ini` | `pytest`         | `ruff check .` (ruff configured)  |
-| `go.mod`                     | `go test ./...`     | `go vet ./...`                    |
-| `Cargo.toml`                 | `cargo test`        | `cargo clippy -- -D warnings`     |
-| `Makefile` with `test` target| `make test`         | `make lint` (target exists)       |
-
-Detected commands are shown to the user for confirmation (edit/accept), then written to config. Nothing detected → ask ("Enter verification commands, empty line to finish") and write the config. Either way the gate always exists — a project with no detectable test runner still gets an explicit, user-supplied one before implementation starts.
-
-Any non-zero exit blocks progression → a fix session gets the failing command output → the gate reruns (bounded, 3 attempts, then ask the user: retry / shell out / abort). The same gate reruns after simplification (§5.8) and once more immediately before final acceptance (§5.10).
-
-Checkpoint `implementation_complete` only after all tasks are done **and** all verification commands pass.
-
-### 5.6 Spec Compliance → `compliance_review_complete`
-
-Fresh reviewer. Inputs: `spec.md`, `plan.md`, `git diff <startCommit>...HEAD` (§2 Git strategy), verification results. Output:
-
-```json
-{
-  "status": "PASS|FAIL",
-  "requirements": { "FR-001": "PASS", "FR-003": "FAIL" },
-  "findings": [ { "requirement": "FR-003", "message": "..." } ]
-}
-```
-
-On FAIL: fix session per failing requirement → deterministic verification → fresh compliance re-review (bounded loop; after 3 failures, ask the user). Persist `compliance-review.json`. Checkpoint.
-
-### 5.7 Code Review → `code_review_complete`
-
-Fresh session invoking the built-in `/code-review` skill over the diff. Verdict schema with severities `CRITICAL|HIGH|MEDIUM|LOW|NIT`.
-
-Policy (deterministic, in shell):
-- CRITICAL, HIGH → fix session, then rerun deterministic verification, then re-review.
-- MEDIUM → fix when the fix session judges it clearly safe; otherwise report.
-- LOW, NIT → report only (persisted in `code-review.json`).
-
-Checkpoint when no CRITICAL/HIGH findings remain.
-
-### 5.8 Simplification → `simplification_complete`
-
-Fresh session invoking `code-simplifier` over the diff: remove unneeded abstraction/duplication/dead code, improve naming, align with repo style, **no behavior changes**. Then rerun deterministic verification; checkpoint only when it passes (on failure: fix loop as in 5.5).
-
-### 5.9 Security Review → `security_review_complete`
-
-Fresh session invoking the built-in `/security-review` skill over the diff. Same verdict schema; policy: CRITICAL/HIGH blocking → fix → verification → re-review; MEDIUM configurable (`SECURITY_BLOCK_MEDIUM=1` in config, default off); LOW report. Persist `security-review.json`. Checkpoint.
-
-### 5.10 Final Acceptance → `final_acceptance_complete`
-
-The deterministic verification gate (§5.5) runs one final time; only then a fresh session with all artifacts (requirements, decisions, spec, plan, diff, all review verdicts, verification results). Output `{"status": "PASS|PASS_WITH_ACCEPTED_RISKS|FAIL", "summary": "..."}` → `final-review.json`.
-
-- PASS / PASS_WITH_ACCEPTED_RISKS → archive the spec to `docs/specs/<feature-slug>.md` and commit (§2 Spec archive), print the checklist summary and the feature branch name (merging is the user's job), mark DONE.
-- FAIL → show reasons; user chooses which stage to return to, or aborts.
-
-```text
-FeatureBandit Final Acceptance
-
-✓ Requirements   ✓ Specification   ✓ Plan
-✓ Implementation ✓ Verification    ✓ Spec Compliance
-✓ Code Review    ✓ Simplification  ✓ Security
-
-Status: PASS
-```
-
-After DONE, starting a new feature resets `.featurebandit/` after confirmation — the spec already lives in `docs/specs/` (§2 Spec archive), git history preserves the code; nothing else is kept.
+`abort` restores the original branch **first**. If that checkout fails, nothing
+is deleted and no success is reported.
 
 ---
 
-## 6. Interaction Conventions
+## 7. Tests
 
-- Single terminal, plain `read -r` prompts, single-letter menus (`[f]/[a]/[c]/[q]`), `✓ ✗ → ○ !` status glyphs (ASCII fallback when `LANG` isn't UTF-8).
-- Default output is the concise stage checklist plus current activity. `FEATUREBANDIT_VERBOSE=1` streams claude output verbatim.
-- Every claude call prints a one-line "what's happening" (`Reviewing specification...`).
-- All abort paths leave `state.json` consistent — a stage is either checkpointed or it isn't; partial artifacts are overwritten on retry.
+| Suite | Cost | Covers |
+|---|---|---|
+| `test/smoke.sh` | free | the whole pipeline against `test/fake-claude` |
+| `test/regress.sh` | free | 26 failure and resume scenarios |
+| `test/e2e.sh` | free | plugins enabled, every agent file the pipeline names, the Spec Kit layout and all eight commands, in a real repository (a throwaway one if this repository has no Spec Kit) |
+| `test/ui.sh` | free | 16 interface scenarios against a stubbed gum |
+| `test/e2e.sh --dispatch` | real API calls | a real `pr-review-toolkit:code-reviewer` dispatch and both Superpowers skills actually loading |
+| `test/e2e.sh --full` | real API calls, real time | one complete pipeline against the real tools in a throwaway repository: every Spec Kit command, the review agents, Code Simplifier, `/security-review`, the verification gate and the final summary |
+
+`test/regress.sh` covers: missing Spec Kit, missing plugin, a failing plugin
+command, a dirty tree, an existing feature branch, a Cyrillic title, a linked
+worktree, a failing commit, a failing state write, interruption after a batch
+commit, failing verification, refusing to run without verification, rollback of
+untracked files, converge appending tasks and the work being reviewed again,
+abort with a failed checkout, resume after every stage, an open checklist item,
+clarify with nothing to ask, an analyze finding never restarting specify, a
+plugin that moves the git branch, installing a missing plugin on request, a
+failed write call never being retried on its own, discarding a partial write
+before a retry, a fix at the final verification going back through review, a new
+feature not inheriting the last one's verification commands, and the summary
+listing only the findings that were really accepted.
+
+`test/ui.sh` covers: an interactive choice through gum, a cancelled choice, a
+failing gum call, gum missing while a terminal is in use, gum not being needed
+without one, an approval that was never given, an answer that is not on offer,
+`NO_COLOR`, `TERM=dumb`, no invented percentage, the timer leaving nothing
+behind after success, failure and interruption, the command's own exit code
+surviving, per-block logs keeping stdout and stderr whole, a long output shown
+as a bounded preview, verification logs never overwriting each other, a log that
+cannot be written, and what a resume reports.
 
 ---
 
-## 7. Error Handling
+## 8. Out of scope
 
-- Any `claude -p` non-zero exit or schema-invalid output → one automatic retry, then interactive `[r] Retry / [q] Abort`.
-- All review loops are bounded (3 automatic iterations) before asking the user, preventing infinite AI ping-pong.
-- Ctrl-C at any point is safe: the next run resumes from the last checkpoint.
-
----
-
-## 8. Out of Scope (V1)
-
-Browser QA / Playwright, multi-feature or parallel workflows, background workers, cloud execution, CI/CD integration, GitHub/Jira sync, web UI/dashboards, server mode, databases, distributed agents, multiple LLM providers, generic plugin frameworks, multi-repo workflows.
-
----
-
-## 9. Definition of Done
-
-A developer runs `featurebandit requirements.md` and the tool: checks Claude → detects/offers to install required plugins → verifies a clean tree and creates the feature branch → detects/confirms lint+test commands → reads requirements → inspects the repo → clarifies gaps → approves requirements → generates and independently reviews the spec (interactive resolution) → generates and independently reviews the plan (interactive resolution) → implements task-by-task → runs deterministic checks → validates spec compliance → runs adversarial code review and fixes blockers → simplifies code and re-verifies → runs security review and fixes blockers → performs final acceptance → archives the approved spec into `docs/specs/` → marks the feature DONE. The next feature builds on the archived specs of all previous ones. Interrupting at any point and re-running resumes from the last incomplete checkpoint.
+Browser QA, multi-feature or parallel workflows, background workers, cloud
+execution, CI/CD integration, GitHub/Jira sync, web UI, server mode, databases,
+multiple LLM providers, generic plugin frameworks, multi-repo workflows.
