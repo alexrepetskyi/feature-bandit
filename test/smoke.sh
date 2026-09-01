@@ -80,6 +80,10 @@ check "back on original branch" "main" "$(git rev-parse --abbrev-ref HEAD)"
 check "feature branch deleted" "0" "$(git branch --list 'featurebandit/*' | wc -l | tr -d ' ')"
 check "state removed" "0" "$([ -d .featurebandit ] && echo 1 || echo 0)"
 
+echo "7. runs from a symlinked install"
+ln -sf "$FB_SRC/featurebandit" "$BIN/fb-linked"
+check "libraries found via symlink" "0" "$(featurebandit_out=$("$BIN/fb-linked" status 2>&1); printf '%s' "$featurebandit_out" | grep -c 'No such file')"
+
 cd / && rm -rf "$WORK"
 echo
 if [ $fails -eq 0 ]; then

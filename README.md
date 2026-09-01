@@ -51,6 +51,59 @@ anywhere; the next run resumes from the last one.
 `bash`, `git`, `jq`, and the `claude` CLI. Bootstrap installs the three plugins it
 needs (`feature-dev`, `superpowers`, `code-simplifier`) on first run.
 
+```bash
+brew install jq                      # macOS
+sudo apt install jq                  # Debian/Ubuntu/WSL
+```
+
+## Install
+
+Clone once, then symlink the entry point onto your `PATH`. The script follows the
+symlink back to its own directory, so the clone can live anywhere — just don't
+move it afterwards without redoing the link.
+
+**macOS / Linux / WSL**
+
+```bash
+git clone git@github.com:alexrepetskyi/feature-bandit.git ~/.feature-bandit
+mkdir -p ~/.local/bin
+ln -s ~/.feature-bandit/featurebandit ~/.local/bin/featurebandit
+```
+
+If `~/.local/bin` is not on your `PATH` yet, add it to your shell profile
+(`~/.zshrc` for zsh, `~/.bashrc` for bash) and open a new terminal:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+Prefer a system-wide install? Use `sudo ln -s ~/.feature-bandit/featurebandit
+/usr/local/bin/featurebandit` instead — same result, needs root.
+
+**Git Bash on Windows**
+
+Symlinks are unreliable there, so put the clone itself on `PATH`:
+
+```bash
+git clone git@github.com:alexrepetskyi/feature-bandit.git ~/.feature-bandit
+echo 'export PATH="$HOME/.feature-bandit:$PATH"' >> ~/.bashrc
+```
+
+**Verify**
+
+```bash
+featurebandit status      # "not inside a git repository" outside a repo is correct
+```
+
+**Update**
+
+```bash
+git -C ~/.feature-bandit pull
+```
+
+The engineering guide and the rules block in `CLAUDE.md` are refreshed on the next
+run in each repository.
+
 ## Usage
 
 ```bash

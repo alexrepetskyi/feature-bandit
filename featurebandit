@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 # FeatureBandit — one feature from requirements to validated implementation.
 
-FB_HOME=$(cd -- "$(dirname -- "$0")" && pwd)
+# follow a symlinked install (plain readlink: -f is GNU-only)
+FB_SELF=$0
+while [ -L "$FB_SELF" ]; do
+  FB_LINK=$(readlink "$FB_SELF")
+  case "$FB_LINK" in
+    /*) FB_SELF=$FB_LINK ;;
+    *)  FB_SELF=$(dirname -- "$FB_SELF")/$FB_LINK ;;
+  esac
+done
+FB_HOME=$(cd -- "$(dirname -- "$FB_SELF")" && pwd)
 
 . "$FB_HOME/lib/common.sh"
 . "$FB_HOME/lib/state.sh"
