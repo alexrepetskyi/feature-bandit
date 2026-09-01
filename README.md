@@ -58,42 +58,31 @@ sudo apt install jq                  # Debian/Ubuntu/WSL
 
 ## Install
 
-Clone once, then symlink the entry point onto your `PATH`. The script follows the
-symlink back to its own directory, so the clone can live anywhere — just don't
-move it afterwards without redoing the link.
-
-**macOS / Linux / WSL**
+One command — clones into `~/.feature-bandit` and links `featurebandit` into
+`~/.local/bin`:
 
 ```bash
-git clone git@github.com:alexrepetskyi/feature-bandit.git ~/.feature-bandit
-mkdir -p ~/.local/bin
-ln -s ~/.feature-bandit/featurebandit ~/.local/bin/featurebandit
+curl -fsSL https://raw.githubusercontent.com/alexrepetskyi/feature-bandit/main/install.sh | bash
 ```
 
-If `~/.local/bin` is not on your `PATH` yet, add it to your shell profile
-(`~/.zshrc` for zsh, `~/.bashrc` for bash) and open a new terminal:
+Already cloned? Run `./install.sh` from the clone and it links that one instead.
+Re-running is safe: it pulls, relinks, and tells you about anything missing.
 
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-```
+Override the locations with `FEATUREBANDIT_HOME` (the clone) and
+`FEATUREBANDIT_BIN` (where the command goes) — for example
+`FEATUREBANDIT_BIN=/usr/local/bin` with `sudo` for a system-wide install.
 
-Prefer a system-wide install? Use `sudo ln -s ~/.feature-bandit/featurebandit
-/usr/local/bin/featurebandit` instead — same result, needs root.
-
-**Git Bash on Windows**
-
-Symlinks are unreliable there, so put the clone itself on `PATH`:
-
-```bash
-git clone git@github.com:alexrepetskyi/feature-bandit.git ~/.feature-bandit
-echo 'export PATH="$HOME/.feature-bandit:$PATH"' >> ~/.bashrc
-```
+On Git Bash the installer skips the symlink (Windows symlinks are unreliable) and
+prints the `PATH` line to add instead.
 
 **Verify**
 
 ```bash
-featurebandit status      # "not inside a git repository" outside a repo is correct
+featurebandit status      # outside a repo, "not inside a git repository" is the right answer
 ```
+
+If the command is not found, `~/.local/bin` is not on your `PATH` — the installer
+prints the exact line to append to your shell profile.
 
 **Update**
 
@@ -120,6 +109,7 @@ Start in a repository with a clean working tree and at least one commit.
 ## Layout
 
 ```
+install.sh         symlinks the entry point onto PATH, cloning first if needed
 featurebandit      entry point: arguments, resume, the stage loop
 lib/common.sh      ui, the claude wrapper, git helpers, the verification gate
 lib/state.sh       state.json and checkpoints
