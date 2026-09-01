@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# fake claude for the FeatureBandit smoke test: canned envelopes, real file writes
+
+if [ "$1" = plugin ]; then
+  echo '[{"id":"feature-dev@claude-plugins-official","enabled":true},
+        {"id":"superpowers@superpowers-dev","enabled":true},
+        {"id":"code-simplifier@claude-plugins-official","enabled":true}]'
+  exit 0
+fi
+
+prompt=""; schema=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p) prompt="$2"; shift 2 ;;
+    --json-schema) schema="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+echo "FAKE CLAUDE CALL: $(printf '%s' "$prompt" | head -1)" >> "$FAKE_LOG"
+
+envelope() { # $1 = structured json or empty
+  if [ -n "$1" ]; then
+    jq -nc --argjson s "$1" '{type:"result",is_error:false,session_id:"sess-1",result:($s|tostring),structured_output:$s}'
+  else
+    jq -nc '{type:"result",is_error:false,session_id:"sess-1",result:"done"}'
+  fi
+}
+
+case "$prompt" in
+  *"requirements analyst"*)
+    envelope '{"context_summary":"# Context\nA tiny repo.","gaps":[{"id":"GAP-001","severity":"IMPORTANT","question":"Should the greeting be localized?"}]}' ;;
+  *"The user answered your questions"*)
+    envelope '{"context_summary":"# Context\nA tiny repo, no localization.","gaps":[]}' ;;
+  *"Write the specification"*)
+    printf '# Spec\n\n- FR-001: greet the user by name.\n- AC-001: greet("x") returns "hello x".\n' > .featurebandit/spec.md
+    envelope '' ;;
+  *"independent reviewer. You did not write this specification"*)
+    if [ -n "$FAKE_SPEC_FAIL" ] && [ ! -f .featurebandit/.specfailed ]; then
+      touch .featurebandit/.specfailed
+      envelope '{"status":"FAIL","findings":[{"id":"SPEC-001","severity":"BLOCKING","requirement":"FR-001","type":"ambiguity","message":"FR-001 does not say what happens for an empty name."}]}'
+    else
+      envelope '{"status":"PASS","findings":[]}'
+    fi ;;
+  *"Fix the specification"*)
+    printf '# Spec\n\n- FR-001: greet the user by name.\n- FR-002: empty name is rejected.\n' > .featurebandit/spec.md
+    envelope '' ;;
+  *"Write the implementation plan"*)
+    printf '# Plan\n\n1. Add greet().\n' > .featurebandit/plan.md
+    envelope '{"tasks":[{"id":"TASK-001","title":"Add greet","covers":["FR-001","AC-001"],"files":["greet.sh"],"steps":["write test","implement"],"status":"pending"}]}' ;;
+  *"implementation plan. You did not write it"*)
+    envelope '{"status":"PASS","findings":[]}' ;;
+  *"Implement one task"*)
+    printf 'greet() { echo "hello $1"; }\n' > greet.sh
+    envelope '{"status":"DONE","detail":"added greet.sh"}' ;;
+  *"verification gate for stage"*)
+    touch fixed
+    envelope '' ;;
+  *"satisfies the approved specification"*)
+    envelope '{"status":"PASS","requirements":{"FR-001":"PASS","AC-001":"PASS"},"findings":[]}' ;;
+  *"Review this change adversarially"*)
+    envelope '{"status":"PASS","findings":[{"id":"CR-001","severity":"NIT","message":"quoting could be tighter"}]}' ;;
+  *"Simplify the change"*)
+    envelope '' ;;
+  *"security review of the change"*)
+    envelope '{"status":"PASS","findings":[]}' ;;
+  *"Final acceptance"*)
+    envelope '{"status":"PASS","summary":"Feature delivered: greet() implemented and tested."}' ;;
+  *)
+    echo "fake claude: unmatched prompt" >&2; exit 1 ;;
+esac

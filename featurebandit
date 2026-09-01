@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# FeatureBandit — one feature from requirements to validated implementation.
+
+FB_HOME=$(cd -- "$(dirname -- "$0")" && pwd)
+
+. "$FB_HOME/lib/common.sh"
+. "$FB_HOME/lib/state.sh"
+. "$FB_HOME/lib/bootstrap.sh"
+. "$FB_HOME/lib/stages.sh"
+
+FB_TMP=$(mktemp -d "${TMPDIR:-/tmp}/featurebandit.XXXXXX") || exit 1
+trap 'rm -rf "$FB_TMP"' EXIT
+
+fb_slug() {
+  local s
+  s=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | tr -s '-')
+  s=${s#-}; s=${s%-}; s=${s:0:40}; s=${s%-}
+  [ -n "$s" ] || s="feature"
+  printf '%s' "$s"
+}
+
+fb_title_of() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line#\#}
+    line=${line# }
+    [ -n "$line" ] && { printf '%s' "${line:0:60}"; return; }
+  done < "$1"
+  printf 'Untitled feature'
+}
+
+fb_read_requirements() {
+  # $1 = argument, may be a file, text, or empty
+  mkdir -p "$FB_DIR"
+  if [ -n "$1" ] && [ -r "$1" ] && [ -f "$1" ]; then
+    cat "$1" > "$FB_DIR/requirements.md"
+  elif [ -n "$1" ]; then
+    printf '%s\n' "$1" > "$FB_DIR/requirements.md"
+  else
+    say ""
+    say "${FB_B}FeatureBandit${FB_R}"
+    say ""
+    fb_ask "What feature do you want to build?"
+    [ -n "$FB_ANSWER" ] || die "no requirements given"
+    printf '%s\n' "$FB_ANSWER" > "$FB_DIR/requirements.md"
+  fi
+}
+
+fb_abort_feature() {
+  fb_state_exists || die "no active feature"
+  say "Feature: $(fb_state_get .title)"
+  fb_menu "Abort it? [y/n]" "yn"
+  [ "$FB_CHOICE" = y ] || exit 0
+
+  local branch orig
+  branch=$(fb_git rev-parse --abbrev-ref HEAD)
+  orig=$(fb_state_get .originalBranch)
+  fb_tree_clean || fb_git checkout -- .
+  fb_git checkout -q "$orig" 2>/dev/null || warn "could not check out $orig"
+  case "$branch" in
+    featurebandit/*)
+      fb_menu "Delete branch $branch and the code on it? [y/n]" "yn"
+      [ "$FB_CHOICE" = y ] && fb_git branch -D "$branch" >/dev/null
+      ;;
+  esac
+  rm -rf "$FB_DIR"
+  say "$FB_OK aborted"
+}
+
+fb_resume_dirty_check() {
+  fb_tree_clean && return 0
+  say ""
+  warn "uncommitted changes found — the last step was interrupted:"
+  fb_git status --short
+  fb_menu "[d] Discard them and redo that step  [q] Quit" "dq"
+  [ "$FB_CHOICE" = q ] && exit 1
+  fb_git checkout -- .
+  fb_git clean -fdq
+}
+
+fb_start_feature() {
+  local slug title start_info
+  title=$(fb_title_of "$FB_DIR/requirements.md")
+  slug=$(fb_slug "$title")
+  start_info=$(fb_git_start "$slug") || exit 1
+  fb_state_new "$slug" "$title" "${start_info% *}" "${start_info#* }"
+  say ""
+  say "$FB_OK feature: $title"
+  say "$FB_OK branch:  featurebandit/$slug"
+}
+
+fb_run_pipeline() {
+  local stage rc
+  while :; do
+    stage=$(fb_next_stage)
+    [ -z "$stage" ] && break
+    say ""
+    say "$FB_B== $(fb_ckpt_label "$stage") ==$FB_R"
+    case "$stage" in
+      requirements)   fb_stage_requirements ;;
+      spec)           fb_stage_spec ;;
+      plan)           fb_stage_plan ;;
+      implementation) fb_stage_implementation ;;
+      compliance)     fb_stage_compliance ;;
+      code_review)    fb_stage_code_review ;;
+      simplification) fb_stage_simplification ;;
+      security)       fb_stage_security ;;
+      final)          fb_stage_final ;;
+    esac
+    rc=$?
+    case $rc in
+      0) ;;
+      2) continue ;;
+      *) say ""; info "stopped — rerun featurebandit to resume from here"; exit 1 ;;
+    esac
+  done
+}
+
+main() {
+  fb_require_tools
+
+  case "$1" in
+    status)
+      fb_state_exists || die "no active feature"
+      fb_status
+      exit 0
+      ;;
+    abort)
+      fb_abort_feature
+      exit 0
+      ;;
+  esac
+
+  say ""
+  say "Plugins:"
+  fb_check_plugins
+  mkdir -p "$FB_DIR"
+  fb_git_exclude
+  fb_install_guide
+
+  local arg="$1"
+  [ "$arg" = resume ] && arg=""
+
+  if fb_state_exists && [ "$(fb_state_get .checkpoints.final_acceptance_complete)" != true ]; then
+    if [ -n "$arg" ]; then
+      say ""
+      say "Existing unfinished feature found:"
+      say ""
+      say "  $(fb_state_get .title)"
+      say "  Current stage: $(fb_ckpt_label "$(fb_next_stage)")"
+      say ""
+      fb_menu "[r] Resume it  [a] Abort it and start the new one  [q] Quit" "raq"
+      case "$FB_CHOICE" in
+        q) exit 0 ;;
+        a) fb_abort_feature; mkdir -p "$FB_DIR"; fb_read_requirements "$arg"; fb_start_feature ;;
+        r) : ;;
+      esac
+    fi
+    fb_resume_dirty_check
+  else
+    if fb_state_exists; then
+      say ""
+      say "Previous feature is done: $(fb_state_get .title)"
+      fb_menu "Start a new feature and reset .featurebandit? [y/n]" "yn"
+      [ "$FB_CHOICE" = y ] || exit 0
+      rm -f "$FB_DIR"/*.json "$FB_DIR"/*.md "$FB_DIR"/diff.patch "$FB_DIR"/verify.log 2>/dev/null
+      fb_install_guide
+    fi
+    fb_read_requirements "$arg"
+    fb_start_feature
+  fi
+
+  fb_install_rules
+  fb_commit "featurebandit: engineering rules"
+  fb_setup_verify || exit 1
+
+  fb_status
+  fb_run_pipeline
+}
+
+main "$@"
