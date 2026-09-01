@@ -103,9 +103,11 @@ esac
 # --- the whole pipeline, for real --------------------------------------------
 # One feature, small enough to be cheap and real enough to exercise every stage.
 # It runs off a terminal, so the approvals are passed up front and the run stops
-# rather than guessing: a,a,c,a,a,a is accept the detected verification command,
-# approve the specification, send nothing back from analyze, approve the plan,
-# accept the review findings, accept the security findings.
+# rather than guessing: accept the detected verification command, approve the
+# specification, send nothing back from analyze, approve the plan, then accept
+# the review and security findings. Converge can append tasks and send the work
+# back through review and security, so several more of those pairs follow;
+# answers that are never reached are simply unused.
 if [ "$1" = --full ]; then
   echo
   echo "full pipeline against the real tools"
@@ -118,8 +120,8 @@ if [ "$1" = --full ]; then
     fi
     cd "$WORK/repo" || exit 1
     echo "  repository: $WORK/repo"
-    printf 'no\nno\nno\nno\nno\n' |
-      FEATUREBANDIT_INSTALL=1 FEATUREBANDIT_CHOICES='a,a,c,a,a,a' \
+    printf 'no\nno\nno\nno\nno\nno\nno\nno\n' |
+      FEATUREBANDIT_INSTALL=1 FEATUREBANDIT_CHOICES='a,a,c,a,a,a,a,a,a,a,a,a' \
       "$FB_SRC/featurebandit" \
       "Add greet.sh with a greet function that prints \"hello <name>\", and greet_test.sh that checks it. make test must run greet_test.sh."
     rc=$?
