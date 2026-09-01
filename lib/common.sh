@@ -250,6 +250,13 @@ fb_config_get() {
 fb_verify() { # STAGE
   local i=1 cmd rc log passed=0
   FB_VERIFY_LOGS=""
+  # skipping was an explicit choice at setup; it is repeated at every stage so
+  # nobody forgets that nothing here is checking the code
+  if fb_config_get VERIFY_SKIPPED >/dev/null 2>&1; then
+    ui_warning "verification skipped — nothing checks this stage but you"
+    FB_VERIFY_PASSED="skipped"
+    return 0
+  fi
   while :; do
     cmd=$(fb_config_get "VERIFY_COMMAND_$i") || break
     log=$(fb_log_path verification "$1")

@@ -97,8 +97,10 @@ featurebandit abort                # drop the feature, back to your branch
 ```
 
 Run it in a git repository with at least one commit and a clean tree. You will be
-asked for at least one verification command — there is no way to continue without
-one.
+asked for at least one verification command — your linter and tests, run in a real
+shell before every commit. If there is genuinely nothing to run, pick *skip
+verification entirely* at the gate (or type `skip` at the prompt); it is recorded
+and repeated at every stage, because then nothing but you is checking the code.
 
 | Variable | |
 |---|---|
@@ -111,7 +113,7 @@ one.
 
 ```bash
 ./test/smoke.sh             # the whole pipeline against a stubbed Claude, free
-./test/regress.sh           # 26 failure and resume scenarios, free
+./test/regress.sh           # 27 failure and resume scenarios, free
 ./test/ui.sh                # the terminal interface and the logs, free
 ./test/e2e.sh               # the real plugins and Spec Kit install, free
 ./test/e2e.sh --dispatch    # also dispatch a real agent and load the real skills

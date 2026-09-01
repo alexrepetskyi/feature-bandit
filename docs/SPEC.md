@@ -255,9 +255,17 @@ own process — one explicit contract, not string-built commands everywhere.
 
 ### Verification gate
 
-Deterministic, in the shell, never AI. **At least one command is mandatory** —
-there is no path that continues without verification. Every command in every
-attempt gets its own log; nothing is overwritten.
+Deterministic, in the shell, never AI. Every command in every attempt gets its
+own log; nothing is overwritten.
+
+**One command is required, or an explicit skip.** The setup gate offers
+*accept the detected commands*, *enter my own* and *skip verification entirely*;
+where nothing was detected, `skip` typed on the first line does the same. A skip
+is written to `.featurebandit/config` as `VERIFY_SKIPPED=1`, so it survives a
+resume, and it is announced at every stage that would have verified, in the
+stage summary and in the final summary. Nothing else in the pipeline checks what
+the model wrote, so a skipped run is the user's word alone — which is why it
+cannot happen by pressing Enter.
 
 Detection is a fixed table, confirmed by the user:
 
@@ -543,7 +551,7 @@ is deleted and no success is reported.
 | Suite | Cost | Covers |
 |---|---|---|
 | `test/smoke.sh` | free | the whole pipeline against `test/fake-claude` |
-| `test/regress.sh` | free | 26 failure and resume scenarios |
+| `test/regress.sh` | free | 27 failure and resume scenarios |
 | `test/e2e.sh` | free | plugins enabled, every agent file the pipeline names, the Spec Kit layout and all eight commands, in a real repository (a throwaway one if this repository has no Spec Kit) |
 | `test/ui.sh` | free | 16 interface scenarios against a stubbed gum |
 | `test/e2e.sh --dispatch` | real API calls | a real `pr-review-toolkit:code-reviewer` dispatch and both Superpowers skills actually loading |
@@ -552,7 +560,8 @@ is deleted and no success is reported.
 `test/regress.sh` covers: missing Spec Kit, missing plugin, a failing plugin
 command, a dirty tree, an existing feature branch, a Cyrillic title, a linked
 worktree, a failing commit, a failing state write, interruption after a batch
-commit, failing verification, refusing to run without verification, rollback of
+commit, failing verification, skipping verification on purpose, refusing to run
+without verification and without a skip, rollback of
 untracked files, converge appending tasks and the work being reviewed again,
 abort with a failed checkout, resume after every stage, an open checklist item,
 clarify with nothing to ask, an analyze finding never restarting specify, a

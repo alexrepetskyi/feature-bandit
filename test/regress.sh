@@ -104,14 +104,30 @@ fb_run_happy > "$WORK/o" 2>&1
 check "debugged it" "1" "$(nonzero "$(count 'Debugging the failing check' "$WORK/o")")"
 check "finished"    "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 
-echo "12. no continuing without a verification command"
+echo "12. verification can be skipped, but only on purpose"
+new_repo skipverify
+rm Makefile && git add -A && git commit -qm drop
+printf 'skip\nno localisation\n' | FEATUREBANDIT_CHOICES='a,c,a,a,a' "$FB" "Add greeting" > "$WORK/o" 2>&1
+check "said it out loud"   "1" "$(nonzero "$(count 'verification skipped' "$WORK/o")")"
+check "warned every stage" "1" "$([ "$(count 'nothing checks this stage but you' "$WORK/o")" -ge 4 ] && echo 1 || echo 0)"
+check "recorded it"        "1" "$(count 'VERIFY_SKIPPED=1' .featurebandit/config)"
+check "no command ran"     "0" "$(ls .featurebandit/logs/add-greeting/verification 2>/dev/null | wc -l | tr -d ' ')"
+check "said so at the end" "1" "$(nonzero "$(count 'Verification: skipped for this feature' "$WORK/o")")"
+check "finished"           "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
+new_repo skipverify2
+printf '%s' "$CLARIFY" | FEATUREBANDIT_CHOICES='s,a,c,a,a,a' "$FB" "Add greeting" > "$WORK/o" 2>&1
+check "skipping a detected runner too" "1" "$(count 'VERIFY_SKIPPED=1' .featurebandit/config)"
+check "the detected make test never ran" "0" "$(count 'Verification: make test' "$WORK/o")"
+check "finished"                       "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
+
+echo "13. no continuing without a verification command"
 new_repo noverify
 rm Makefile && git add -A && git commit -qm drop
 printf '\n' | "$FB" "Add greeting" > "$WORK/o" 2>&1
 check "refused"  "1" "$?"
 check "said why" "1" "$(nonzero "$(count 'at least one verification command is required' "$WORK/o")")"
 
-echo "13. rollback removes untracked files too"
+echo "14. rollback removes untracked files too"
 new_repo rollback
 printf 'test:\n\t@test -f fixed\n' > Makefile && git add -A && git commit -qm makefile
 FAKE_UNTRACKED=1 FAKE_EXIT_ON='systematic-debugging' fb_run_happy q > "$WORK/o" 2>&1
@@ -120,7 +136,7 @@ FEATUREBANDIT_CHOICES='d,q' FAKE_EXIT_ON='/speckit-implement' "$FB" resume > "$W
 check "untracked discarded" "0" "$([ -f scratch.tmp ] && echo 1 || echo 0)"
 check "tracked restored"    ""  "$(git status --porcelain)"
 
-echo "14. converge appends tasks, they get implemented"
+echo "15. converge appends tasks, they get implemented"
 new_repo converge
 FAKE_CONVERGE_ADD=1 fb_run_happy a,a > "$WORK/o" 2>&1
 check "committed the new tasks" "1" "$(count 'converge appended tasks' <(git log --oneline))"
@@ -129,7 +145,7 @@ check "appended task done"      "1" "$(count '^- \[X\] T005' specs/001-feature/t
 check "reviewed the new work"   "2" "$(count 'pr-review-toolkit:code-reviewer' "$FAKE_LOG")"
 check "finished"                "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 
-echo "15. abort keeps everything when the checkout fails"
+echo "16. abort keeps everything when the checkout fails"
 new_repo abortfail
 FAKE_EXIT_ON='/speckit-plan' fb_run_happy q > /dev/null 2>&1
 git branch -D main >/dev/null
@@ -139,7 +155,7 @@ check "said why"         "1" "$(nonzero "$(count 'could not check out main' "$WO
 check "state kept"       "1" "$([ -f .featurebandit/state.json ] && echo 1 || echo 0)"
 check "still on feature" "featurebandit/add-greeting" "$(git rev-parse --abbrev-ref HEAD)"
 
-echo "16. resume after every stage"
+echo "17. resume after every stage"
 resume_choices() {
   case "$1" in
     specify)   printf 'a,c,a,a,a' ;;
@@ -180,7 +196,7 @@ for stage in specify plan implement review simplify security converge; do
   check "resumed past $stage" "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 done
 
-echo "17. an open checklist item is shown and can be closed before approval"
+echo "18. an open checklist item is shown and can be closed before approval"
 new_repo checklist
 printf 'no localisation\nno localisation\n' | FAKE_CHECKLIST_OPEN=1 \
   FEATUREBANDIT_CHOICES='a,c,a,c,a,a,a' "$FB" "Add greeting" > "$WORK/o" 2>&1
@@ -189,14 +205,14 @@ check "listed it"              "1" "$(nonzero "$(count 'CHK002' "$WORK/o")")"
 check "clarified twice"        "2" "$(count '^/speckit-clarify' "$FAKE_LOG")"
 check "finished"               "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 
-echo "18. clarify with nothing to ask never prompts for an answer"
+echo "19. clarify with nothing to ask never prompts for an answer"
 new_repo noclarify
 FAKE_CLARIFY_NONE=1 FEATUREBANDIT_CHOICES='a,a,c,a,a,a' "$FB" "Add greeting" </dev/null > "$WORK/o" 2>&1
 check "said so"           "1" "$(nonzero "$(count 'clarify: no open questions' "$WORK/o")")"
 check "asked nothing"     "0" "$(count 'your answer' "$WORK/o")"
 check "finished"          "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 
-echo "19. an analyze finding never restarts specify"
+echo "20. an analyze finding never restarts specify"
 new_repo analyze
 printf 'no localisation\nno localisation\n' | \
   FEATUREBANDIT_CHOICES='a,a,l,c,a,a,a' "$FB" "Add greeting" > "$WORK/o" 2>&1
@@ -206,7 +222,7 @@ check "replanned"          "2" "$(count '^/speckit-plan' "$FAKE_LOG")"
 check "one feature dir"    "1" "$(ls -d specs/*/ | wc -l | tr -d ' ')"
 check "finished"           "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 
-echo "20. a plugin that moves the branch stops the run"
+echo "21. a plugin that moves the branch stops the run"
 new_repo hijack
 FAKE_HIJACK_ON='/speckit-plan' fb_run_happy q > "$WORK/o" 2>&1
 check "stopped"     "1" "$?"
@@ -214,7 +230,7 @@ check "said why"    "1" "$(nonzero "$(count 'branch changed underneath' "$WORK/o
 git checkout -q featurebandit/add-greeting 2>/dev/null
 check "plan not approved" "1" "$("$FB" status 2>&1 | grep -c 'Continues at: Plan')"
 
-echo "21. a missing plugin is installed on request"
+echo "22. a missing plugin is installed on request"
 new_repo installplugin
 printf '%s' "$CLARIFY" | FAKE_NO_PLUGIN=code-simplifier \
   FEATUREBANDIT_CHOICES="i,$HAPPY" "$FB" "Add greeting" > "$WORK/o" 2>&1
@@ -222,7 +238,7 @@ check "ran the official command" "1" "$(nonzero "$(count 'claude plugin install 
 check "installed it"             "1" "$([ -f "$FAKE_INSTALL_DIR/code-simplifier" ] && echo 1 || echo 0)"
 check "finished"                 "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 
-echo "22. a failed write call is never retried on its own"
+echo "23. a failed write call is never retried on its own"
 new_repo writeretry
 printf '%s' "$CLARIFY" |
   FAKE_EXIT_ON='/speckit-plan' FEATUREBANDIT_CHOICES='a,a,q' "$FB" "Add greeting" > "$WORK/o" 2>&1
@@ -231,7 +247,7 @@ check "called it once"    "1" "$(count '^/speckit-plan' "$FAKE_LOG")"
 check "warned about writes" "1" "$(nonzero "$(count 'it may have written some before it failed' "$WORK/o")")"
 check "plan still open"   "1" "$("$FB" status 2>&1 | grep -c 'Continues at: Plan')"
 
-echo "23. discarding before a retry removes what the failed block wrote"
+echo "24. discarding before a retry removes what the failed block wrote"
 new_repo writediscard
 printf '%s' "$CLARIFY" | FAKE_EXIT_ON='/speckit-tasks' \
   FEATUREBANDIT_CHOICES='a,a,d,q' "$FB" "Add greeting" > "$WORK/o" 2>&1
@@ -240,7 +256,7 @@ check "retried after the discard" "2" "$(count '^/speckit-tasks' "$FAKE_LOG")"
 check "the partial plan is gone"  "0" "$([ -f specs/001-feature/plan.md ] && echo 1 || echo 0)"
 check "the committed spec is not" "1" "$([ -f specs/001-feature/spec.md ] && echo 1 || echo 0)"
 
-echo "24. a fix at the final verification goes back through review"
+echo "25. a fix at the final verification goes back through review"
 new_repo finalfix
 printf 'test:\n\t@if [ -f .featurebandit/converge.md ] && [ ! -f fixed ]; then echo "spec gap"; exit 1; fi; echo ok\n' > Makefile
 git add -A && git commit -qm makefile
@@ -253,7 +269,7 @@ check "security-checked it"        "2" "$(count '^/security-review' "$FAKE_LOG")
 check "converged again"            "2" "$(count '^/speckit-converge' "$FAKE_LOG")"
 check "finished"                   "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 
-echo "25. a new feature never inherits the last one's verification commands"
+echo "26. a new feature never inherits the last one's verification commands"
 new_repo newfeature
 fb_run_happy > "$WORK/o" 2>&1
 check "first one finished" "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
@@ -261,7 +277,7 @@ printf '%s' "$CLARIFY" | FEATUREBANDIT_CHOICES="y,$HAPPY" "$FB" "Add farewell" >
 check "asked again"        "1" "$(nonzero "$(count 'Detected verification commands' "$WORK/o2")")"
 check "second one finished" "1" "$("$FB" status 2>&1 | grep -c 'Continues at: finished')"
 
-echo "26. the summary lists only the findings that were really accepted"
+echo "27. the summary lists only the findings that were really accepted"
 new_repo accepted
 fb_run_happy > "$WORK/o" 2>&1
 check "listed the accepted review report" "1" "$(nonzero "$(count 'review-code-reviewer.md' "$WORK/o")")"

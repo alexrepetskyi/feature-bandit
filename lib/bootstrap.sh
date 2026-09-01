@@ -287,15 +287,28 @@ fb_write_verify_config() {
   return 0
 }
 
+# Verification is the only check on the model's work that is not the model's
+# own. Skipping it is allowed, but it is recorded and said out loud every time.
+fb_skip_verify() {
+  printf 'VERIFY_SKIPPED=1\n' > "$FB_DIR/config" || fb_fail "could not write $FB_DIR/config"
+  ui_warning "verification skipped — nothing but you will check what gets written"
+}
+
 fb_ask_verify_commands() {
   local cmds="" line n=0 old
   ui_err "Enter verification commands (lint, tests), one per line. Empty line to finish."
+  ui_err "Type 'skip' on the first line to run without verification at all."
   while :; do
     printf '> ' >&2
     IFS= read -r line || break
+    if [ "$line" = skip ] && [ $n -eq 0 ]; then
+      fb_skip_verify
+      return 0
+    fi
     if [ -z "$line" ]; then
       [ $n -gt 0 ] && break
       ui_warning "at least one command is required — nothing else runs the tests the model writes"
+      ui_detail "or type 'skip' to run without verification"
       continue
     fi
     cmds="$cmds$line
@@ -314,6 +327,7 @@ fb_ask_verify_commands() {
 
 fb_setup_verify() {
   fb_config_get VERIFY_COMMAND_1 >/dev/null 2>&1 && return 0
+  fb_config_get VERIFY_SKIPPED   >/dev/null 2>&1 && return 0
 
   fb_detect_verify
   if [ -n "$FB_DET_TEST" ] || [ -n "$FB_DET_LINT" ]; then
@@ -321,8 +335,10 @@ fb_setup_verify() {
     ui_err "Detected verification commands:"
     [ -n "$FB_DET_LINT" ] && ui_err "  $FB_DET_LINT"
     [ -n "$FB_DET_TEST" ] && ui_err "  $FB_DET_TEST"
-    ui_gate "Use these to verify every change?" "a:Accept them" "e:Enter my own" || return 1
+    ui_gate "Use these to verify every change?" \
+      "a:Accept them" "e:Enter my own" "s:Skip verification entirely" || return 1
     [ "$FB_CHOICE" = a ] && { fb_write_verify_config "$FB_DET_LINT" "$FB_DET_TEST"; return 0; }
+    [ "$FB_CHOICE" = s ] && { fb_skip_verify; return 0; }
   else
     ui_err ""
     ui_err "No test runner detected in this repository."

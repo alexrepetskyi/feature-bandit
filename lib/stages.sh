@@ -60,7 +60,11 @@ fb_stage_ok() {
   fb_checkpoint "$1" "$secs"
   {
     [ -n "$FB_STAGE_TASKS" ] && echo "Tasks:        $FB_STAGE_TASKS"
-    [ -n "$FB_VERIFY_PASSED" ] && echo "Verification: $FB_VERIFY_PASSED passed"
+    case "$FB_VERIFY_PASSED" in
+      "")      ;;
+      skipped) echo "Verification: skipped" ;;
+      *)       echo "Verification: $FB_VERIFY_PASSED passed" ;;
+    esac
     [ -n "$FB_STAGE_COMMITS" ] && echo "Commits:      $FB_STAGE_COMMITS"
     echo "Logs:         $(fb_rel "$FB_LOGS/$(fb_log_dir "$1")")/"
     echo "Next:         $(fb_ckpt_label "$(fb_next_after "$1")")"
@@ -502,11 +506,15 @@ fb_stage_done() {
   ui_detail "Commits:"
   fb_git log --oneline "$FB_START..HEAD" | while IFS= read -r l; do ui_detail "  $l"; done
   ui_detail ""
-  ui_detail "Verification commands that passed:"
-  while cmd=$(fb_config_get "VERIFY_COMMAND_$i"); do
-    ui_detail "  $cmd"
-    i=$((i + 1))
-  done
+  if fb_config_get VERIFY_SKIPPED >/dev/null 2>&1; then
+    ui_detail "Verification: skipped for this feature — no test or linter ran"
+  else
+    ui_detail "Verification commands that passed:"
+    while cmd=$(fb_config_get "VERIFY_COMMAND_$i"); do
+      ui_detail "  $cmd"
+      i=$((i + 1))
+    done
+  fi
   ui_detail ""
   if [ -s "$FB_DIR/accepted.txt" ]; then
     ui_detail "Findings you accepted rather than fixed:"
