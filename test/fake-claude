@@ -13,6 +13,7 @@
 #   FAKE_INSTALL_EXIT    exit code for `claude plugin install` (default 0)
 #   FAKE_UNTRACKED       implement also drops an untracked file
 #   FAKE_CLARIFY_NONE    clarify reports no open questions
+#   FAKE_CLARIFY_TABLE   clarify offers its choices as an option table
 #   FAKE_CHECKLIST_OPEN  the checklist leaves one item unchecked, once
 #   FAKE_HIJACK_ON       substring of a prompt after which the branch is switched
 #   FAKE_SLOW            seconds to spend before answering
@@ -96,6 +97,15 @@ case "$speckit" in
   clarify)
     if [ -n "$FAKE_CLARIFY_NONE" ]; then
       result "No critical ambiguities detected worth formal clarification."
+    elif [ -n "$FAKE_CLARIFY_TABLE" ]; then
+      # spec kit offers its choices as a table whose first column is the key
+      result "**Question:** Should the greeting be localised? (FR-001)
+
+| Option | Description |
+|--------|-------------|
+| A | One fixed English string |
+| B | Look the greeting up per locale |
+| Short | Provide a different short answer (<=5 words) |"
     else
       result "**Question:** Should the greeting be localised? (FR-001)
 

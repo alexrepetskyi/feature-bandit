@@ -18,6 +18,7 @@ that nothing moved the git branch.
 
 ```
 1  Specification   /speckit-specify  →  /speckit-clarify ⇄ your answers
+                   its questions become menus when it offers options
                    →  /speckit-checklist
                    gate: view · approve · clarify more · stop        → commit
 

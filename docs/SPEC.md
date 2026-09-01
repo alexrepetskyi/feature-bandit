@@ -317,7 +317,7 @@ either way. `NO_COLOR` drops colour but leaves the interactive behaviour alone.
 |---|---|---|
 | menus | `gum choose` — arrow keys, highlighted option, Enter takes the first (safe) one | the options are printed and the answer comes from `FEATUREBANDIT_CHOICES` |
 | yes/no | `gum confirm`, defaulting to no | same, from `FEATUREBANDIT_CHOICES` |
-| free text | `gum input` | one line read from stdin |
+| free text | `gum input`, or `gum choose` over the options the tool itself offered | one line read from stdin |
 | progress | spinner glyph and elapsed seconds, repainted in place on stderr | one plain line at the start, then a line every 15s; no cursor movement at all |
 | colour | semantic | none |
 
@@ -453,6 +453,10 @@ silently checked with the last one's commands.
 1. `speckit-specify <raw requirements>`.
 2. Read `feature_directory` from `.specify/feature.json`.
 3. Clarification loop: relay each `**Question:**` turn, answer via `--resume`.
+   When the turn carries Spec Kit's own option table, its rows are drawn as a
+   menu and the answer sent back is the option key Spec Kit printed; the keys
+   and the wording stay Spec Kit's, and "type my own answer" is always the last
+   entry. A turn without a table is answered as free text, as before.
 4. `speckit-checklist completeness, unambiguous requirements, testable
    acceptance criteria, failure behaviour, permissions and validation`.
 5. **Spec gate.** Open checklist items are counted and listed. Approve, view the
@@ -553,7 +557,7 @@ is deleted and no success is reported.
 | `test/smoke.sh` | free | the whole pipeline against `test/fake-claude` |
 | `test/regress.sh` | free | 27 failure and resume scenarios |
 | `test/e2e.sh` | free | plugins enabled, every agent file the pipeline names, the Spec Kit layout and all eight commands, in a real repository (a throwaway one if this repository has no Spec Kit) |
-| `test/ui.sh` | free | 16 interface scenarios against a stubbed gum |
+| `test/ui.sh` | free | 17 interface scenarios against a stubbed gum |
 | `test/e2e.sh --dispatch` | real API calls | a real `pr-review-toolkit:code-reviewer` dispatch and both Superpowers skills actually loading |
 | `test/e2e.sh --full` | real API calls, real time | one complete pipeline against the real tools in a throwaway repository: every Spec Kit command, the review agents, Code Simplifier, `/security-review`, the verification gate and the final summary |
 
@@ -571,11 +575,12 @@ before a retry, a fix at the final verification going back through review, a new
 feature not inheriting the last one's verification commands, and the summary
 listing only the findings that were really accepted.
 
-`test/ui.sh` covers: an interactive choice through gum, a cancelled choice, a
-failing gum call, gum missing while a terminal is in use, gum not being needed
+`test/ui.sh` covers: an interactive choice through gum, an option table from a
+tool becoming a menu, a cancelled choice, a failing gum call, gum missing while a terminal is in use, gum not being needed
 without one, an approval that was never given, an answer that is not on offer,
 `NO_COLOR`, `TERM=dumb`, no invented percentage, the timer leaving nothing
-behind after success, failure and interruption, the command's own exit code
+behind after success, failure and interruption, Ctrl-C ending the running
+command and not just the runner, the command's own exit code
 surviving, per-block logs keeping stdout and stderr whole, a long output shown
 as a bounded preview, verification logs never overwriting each other, a log that
 cannot be written, and what a resume reports.

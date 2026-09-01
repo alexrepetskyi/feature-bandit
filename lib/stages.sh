@@ -169,17 +169,39 @@ fb_findings_gate() {
 
 # --- 1. specification --------------------------------------------------------
 
+# Spec Kit's clarify renders the choices it will accept as a markdown table
+# whose first column is the option key — its own documented format, the same
+# way "- [ ] T001" is. The keys and the wording stay Spec Kit's; FeatureBandit
+# only draws them, and any question without a table is answered as free text.
+fb_clarify_options() {
+  printf '%s' "$1" | awk -F'|' '
+    /^[[:space:]]*\|/ {
+      key = $2; desc = $3
+      gsub(/^[ \t]+|[ \t]+$/, "", key)
+      gsub(/^[ \t]+|[ \t]+$/, "", desc)
+      if (key == "" || desc == "") next
+      if (key ~ /^[-: ]+$/ || tolower(key) == "option") next
+      if (length(key) > 8) next
+      print key ":" desc
+    }'
+}
+
 # Spec Kit's clarify asks one question per turn and marks each with its
 # documented "**Question:**" prefix; no marker means it has nothing left to ask.
 fb_clarify_loop() {
-  local round=0 sid answer
+  local round=0 sid answer options oldifs
   fb_claude "Spec Kit: clarify" "clarify" write "${FB_SK}clarify" || return 1
   while [ $round -lt 5 ]; do
     printf '%s' "$FB_OUT" | grep -q '^\*\*Question:\*\*' || break
     round=$((round + 1))
     fb_report "$FB_DIR/clarify.md"
     sid="$FB_SESSION"
-    ui_prompt "your answer (empty = tell Spec Kit you are done)"
+    oldifs=$IFS; IFS=$'\n'
+    # shellcheck disable=SC2207
+    #   one option per line is exactly the split we want
+    options=($(fb_clarify_options "$FB_OUT"))
+    IFS=$oldifs
+    ui_answer "your answer (empty = tell Spec Kit you are done)" "${options[@]}"
     answer="$FB_ANSWER"
     [ -n "$answer" ] || answer="done"
     fb_claude "Spec Kit: clarify ($round of at most 5)" "clarify-answer" write "$answer" "$sid" || return 1

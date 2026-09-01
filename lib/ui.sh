@@ -302,6 +302,34 @@ ui_confirm() {
   esac
 }
 
+# ui_answer "question" "A:text" "B:text" ... -> FB_ANSWER
+# When the tool offered its own options, they are drawn as a menu and the answer
+# is the option's own key — the labels and the keys are the tool's, not ours.
+# No options, no terminal, or "type my own" all fall back to free text.
+ui_answer() {
+  local header="$1" o labels=() picked
+  shift
+  if [ "$FB_TTY" != 1 ] || [ $# -eq 0 ]; then
+    ui_prompt "$header"
+    return 0
+  fi
+  for o in "$@"; do labels+=("${o%%:*} — ${o#*:}"); done
+  labels+=("Type my own answer")
+  ui_err ""
+  if ! picked=$(gum choose --header "$FB_S_ASK $header" \
+      --height $(( ${#labels[@]} + 2 )) "${labels[@]}") || [ -z "$picked" ]; then
+    FB_ANSWER=""
+    return 0
+  fi
+  if [ "$picked" = "Type my own answer" ]; then
+    ui_prompt "$header"
+    return 0
+  fi
+  FB_ANSWER=${picked%% — *}
+  ui_err "$FB_YEL$FB_S_ASK $header$FB_OFF $picked"
+  return 0
+}
+
 # ui_prompt "question" -> FB_ANSWER; free text, never an approval
 ui_prompt() {
   ui_err ""
