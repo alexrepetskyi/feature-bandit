@@ -1,135 +1,95 @@
 # FeatureBandit
 
-Terminal orchestrator that takes one feature from raw requirements to reviewed,
-tested code. Portable shell scripts around the Claude Code CLI — no runtime, no
-SDK, no API keys of its own.
+Takes one feature from a sentence of requirements to reviewed, tested code on its
+own branch.
 
-**The shell makes workflow decisions; Claude makes engineering decisions.** Every
-stage is a fresh `claude -p` call returning schema-validated JSON. The script
-reads the verdict and decides what happens next, so the pipeline is deterministic
-even though the work inside each stage is not.
+You describe the feature and answer a few questions. It explores your repository,
+writes a specification, plans the work, implements it test-first, reviews what it
+wrote, and hands you a branch to merge. It is a handful of bash scripts driving
+the Claude Code CLI — nothing running in the background, no API key of its own.
+
+## How it works
+
+Nine stages in a fixed order. Each one is a fresh Claude session with a focused
+prompt; the shell reads the result and decides whether to move on. That split is
+the whole idea — Claude makes the engineering decisions, the script owns the
+workflow, so the pipeline stays predictable even though the work inside it isn't.
 
 ```
-requirements ──▶ specification ──▶ plan ──▶ implementation ──▶ done
-                      │              │            │
-                   reviewed       reviewed    per task:
-                 independently  independently  tests + lint
-                                                  ↓
-                                        compliance ▶ code review
-                                        ▶ simplify ▶ security ▶ accept
+requirements → spec → plan → implementation → compliance
+             → code review → simplify → security → done
 ```
 
-Each arrow is a checkpoint written to `.featurebandit/state.json`. Ctrl-C
-anywhere; the next run resumes from the last one.
+**Requirements.** Reads your code and any specs from earlier features, then asks
+only about gaps that would actually change the implementation. Blocking questions
+need an answer; the rest you can skip.
 
-## What it does
+**Spec and plan.** Each is written, then reviewed by a separate session that never
+saw the author's context, then approved by you. The plan review checks that every
+requirement maps to a task.
 
-- **Explores the repository first.** Reads the code, the conventions, the tests,
-  and every previously archived spec before writing anything.
-- **Asks about real gaps only.** Blocking questions must be answered; the rest can
-  be skipped and are recorded as accepted assumptions. Answers are never re-asked.
-- **Writes a specification with stable FR/AC ids**, then has a *separate* session
-  review it — the reviewer never shares context with the author.
-- **Plans against the spec**, and checks the plan by traceability: every
-  requirement must map to a task, or it is a blocking finding.
-- **Implements task by task, test first**, committing only after the tests and
-  linter pass in a plain shell. A committed tree is a working tree.
-- **Runs your project's own tests and linter as the gate** — detected from
-  `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, or a `Makefile`, and
-  confirmed by you. Tests the model wrote count only when they pass outside the
-  model's session.
-- **Reviews the diff adversarially** for correctness, then simplifies it, then
-  reviews it for vulnerabilities. Critical and high findings block; the rest are
-  reported.
-- **Archives the approved spec to `docs/specs/`** on the feature branch. The next
-  feature reads it as existing behavior and must state any change as superseding.
-- **Never merges and never touches your uncommitted work.** All work happens on
-  `featurebandit/<slug>`; `abort` puts you back where you started.
+**Implementation.** Task by task, test first. After each task your own tests and
+linter have to pass in a plain shell — not just inside the model's session —
+before anything gets committed. The commands are detected from `package.json`,
+`pyproject.toml`, `go.mod`, `Cargo.toml`, or a `Makefile`, and you confirm them.
+
+**Reviews.** Compliance against the spec, an adversarial code review,
+simplification, then security. Critical and high findings block and get fixed; the
+rest are reported and left to you.
+
+Everything happens on `featurebandit/<slug>`, one commit per task. It never merges
+and never touches your uncommitted work. Ctrl-C is safe — rerun and it continues
+from the last checkpoint, `featurebandit status` shows where that is, and
+`featurebandit abort` puts you back where you started.
+
+The approved spec is committed to `docs/specs/`. The next feature reads it as
+existing behavior, so specs pile up into a description of what the project does.
+
+```bash
+featurebandit "Add RBAC support"   # start from a description
+featurebandit requirements.md      # or from a file
+featurebandit                      # resume where you left off
+featurebandit status               # what's done, what's next
+featurebandit abort                # drop the feature, back to your branch
+```
 
 ## Requirements
 
-`bash`, `git`, `jq`, and the `claude` CLI. Bootstrap installs the three plugins it
-needs (`feature-dev`, `superpowers`, `code-simplifier`) on first run.
+`bash`, `git`, `jq`, and the `claude` CLI. On first run it installs the three
+Claude plugins it uses.
 
 ```bash
-brew install jq                      # macOS
-sudo apt install jq                  # Debian/Ubuntu/WSL
+brew install jq            # macOS
+sudo apt install jq        # Debian, Ubuntu, WSL
 ```
 
-## Install
+Run it inside a git repository that has at least one commit and no uncommitted
+changes.
 
-One command — clones into `~/.feature-bandit` and links `featurebandit` into
-`~/.local/bin`:
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/alexrepetskyi/feature-bandit/main/install.sh | bash
 ```
 
-Already cloned? Run `./install.sh` from the clone and it links that one instead.
-Re-running is safe: it pulls, relinks, and tells you about anything missing.
+This clones into `~/.feature-bandit` and puts `featurebandit` in `~/.local/bin`.
+If you already have the repo, run `./install.sh` from it and it links that copy
+instead. Running it again pulls the latest version and relinks, so it doubles as
+the update command.
 
-Override the locations with `FEATUREBANDIT_HOME` (the clone) and
-`FEATUREBANDIT_BIN` (where the command goes) — for example
-`FEATUREBANDIT_BIN=/usr/local/bin` with `sudo` for a system-wide install.
-
-On Git Bash the installer skips the symlink (Windows symlinks are unreliable) and
-prints the `PATH` line to add instead.
-
-**Verify**
+Check it worked:
 
 ```bash
-featurebandit status      # outside a repo, "not inside a git repository" is the right answer
+featurebandit status
 ```
 
-If the command is not found, `~/.local/bin` is not on your `PATH` — the installer
-prints the exact line to append to your shell profile.
+Outside a repository that prints "not inside a git repository", which means it
+loaded fine. If the command isn't found at all, `~/.local/bin` isn't on your
+`PATH` — the installer prints the line to add. To install somewhere else, set
+`FEATUREBANDIT_BIN`, for example `sudo FEATUREBANDIT_BIN=/usr/local/bin
+./install.sh`.
 
-**Update**
+---
 
-```bash
-git -C ~/.feature-bandit pull
-```
-
-The engineering guide and the rules block in `CLAUDE.md` are refreshed on the next
-run in each repository.
-
-## Usage
-
-```bash
-featurebandit                     # resume, or start interactively
-featurebandit requirements.md     # start from a file
-featurebandit "Add RBAC support"  # start from text
-featurebandit status              # where it stopped
-featurebandit abort               # back to the original branch
-```
-
-Start in a repository with a clean working tree and at least one commit.
-`FEATUREBANDIT_VERBOSE=1` prints what each session returned.
-
-## Layout
-
-```
-install.sh         symlinks the entry point onto PATH, cloning first if needed
-featurebandit      entry point: arguments, resume, the stage loop
-lib/common.sh      ui, the claude wrapper, git helpers, the verification gate
-lib/state.sh       state.json and checkpoints
-lib/bootstrap.sh   preflight, plugins, project conventions, gate detection
-lib/stages.sh      the nine stages: schemas, prompts, decisions
-lib/guide.md       engineering guide installed into the target repository
-```
-
-Artifacts live in `.featurebandit/` (git-excluded, one active feature per
-repository). Only the spec outlives the feature.
-
-## Testing it
-
-```bash
-./test/smoke.sh
-```
-
-Runs the whole pipeline against a stubbed `claude` in throwaway repositories: no
-API calls, no cost. Covers the happy path, dirty-tree refusal, interrupt and
-resume, a failing test gate with its fix loop, an interactive review failure, and
-abort.
-
-See [docs/SPEC.md](docs/SPEC.md) for the full specification.
+Full specification: [docs/SPEC.md](docs/SPEC.md). To watch the whole pipeline run
+against a stubbed Claude, for free: `./test/smoke.sh`.
