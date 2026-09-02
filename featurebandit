@@ -83,6 +83,17 @@ fb_abort_feature() {
   ui_confirm "Abort this feature and go back to $FB_ORIG?" || exit 0
 
   fb_tree_clean || fb_rollback
+
+  # the feature ran on a branch that was already yours: its commits are yours
+  # too, so nothing is checked out and nothing is deleted
+  if [ "$FB_BRANCH" = "$FB_ORIG" ]; then
+    ui_warning "this feature ran on $FB_BRANCH itself — its commits stay where they are"
+    ui_detail "drop them yourself if you want them gone:  git reset --hard $FB_START"
+    rm -rf "$FB_DIR" || fb_fail "could not remove $FB_DIR"
+    ui_info "aborted — state removed, $FB_BRANCH left as it is"
+    return 0
+  fi
+
   if ! fb_git checkout -q "$FB_ORIG"; then
     ui_warning "could not check out $FB_ORIG — the feature is left untouched"
     die "resolve that first; nothing was deleted"

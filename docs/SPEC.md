@@ -197,7 +197,12 @@ stock macOS, so a stage is bounded by a background watchdog process instead.
 ### Git
 
 - The tree must be clean before anything is touched.
-- A **new** branch is created off HEAD. `featurebandit/<slug>` is never reused:
+- A **new** branch is created off HEAD, unless `FEATUREBANDIT_BRANCH=current`
+  asks for the branch that is already checked out — then the commits land there
+  and `abort` neither checks anything out nor deletes a branch that is the
+  user's own; it removes the state and prints the `git reset --hard <start>`
+  that would drop the commits.
+- `featurebandit/<slug>` is never reused:
   a colliding name becomes `featurebandit/<slug>-2`, `-3`, … A title with no
   ASCII letters (Cyrillic, CJK) gets `feature-<cksum>` so it is still unique.
 - **Branch invariant.** `git rev-parse --abbrev-ref HEAD` is compared with
@@ -555,7 +560,7 @@ is deleted and no success is reported.
 | Suite | Cost | Covers |
 |---|---|---|
 | `test/smoke.sh` | free | the whole pipeline against `test/fake-claude` |
-| `test/regress.sh` | free | 27 failure and resume scenarios |
+| `test/regress.sh` | free | 29 failure and resume scenarios |
 | `test/e2e.sh` | free | plugins enabled, every agent file the pipeline names, the Spec Kit layout and all eight commands, in a real repository (a throwaway one if this repository has no Spec Kit) |
 | `test/ui.sh` | free | 17 interface scenarios against a stubbed gum |
 | `test/e2e.sh --dispatch` | real API calls | a real `pr-review-toolkit:code-reviewer` dispatch and both Superpowers skills actually loading |
@@ -563,7 +568,8 @@ is deleted and no success is reported.
 
 `test/regress.sh` covers: missing Spec Kit, missing plugin, a failing plugin
 command, a dirty tree, an existing feature branch, a Cyrillic title, a linked
-worktree, a failing commit, a failing state write, interruption after a batch
+worktree, working on the branch you are already on and aborting there without
+losing it, a failing commit, a failing state write, interruption after a batch
 commit, failing verification, skipping verification on purpose, refusing to run
 without verification and without a skip, rollback of
 untracked files, converge appending tasks and the work being reviewed again,

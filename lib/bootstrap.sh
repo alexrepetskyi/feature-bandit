@@ -239,6 +239,8 @@ fb_unique_branch() {
 }
 
 # clean tree + a new branch off HEAD; echoes "startCommit<TAB>originalBranch<TAB>branch"
+# FEATUREBANDIT_BRANCH=current keeps the branch you are already on: the commits
+# then land there, and abort will not delete a branch that is yours.
 fb_git_start() {
   local branch orig head
   fb_tree_clean || {
@@ -249,6 +251,14 @@ fb_git_start() {
   head=$(fb_git rev-parse HEAD 2>/dev/null) ||
     die "repository has no commits yet — make an initial commit first"
   orig=$(fb_git rev-parse --abbrev-ref HEAD) || fb_fail "git rev-parse failed"
+
+  case "${FEATUREBANDIT_BRANCH:-}" in
+    .|current)
+      ui_info "staying on $orig — every commit lands there (FEATUREBANDIT_BRANCH)"
+      printf '%s\t%s\t%s' "$head" "$orig" "$orig"
+      return 0 ;;
+  esac
+
   branch=$(fb_unique_branch "$1")
   fb_git checkout -q -b "$branch" || fb_fail "cannot create branch $branch"
   printf '%s\t%s\t%s' "$head" "$orig" "$branch"

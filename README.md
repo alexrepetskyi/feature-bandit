@@ -58,8 +58,9 @@ Superpowers is used in exactly two places: `systematic-debugging` when your test
 fail, and `test-driven-development` when review or security findings get fixed.
 Both are invoked as slash commands, so the skill really loads.
 
-Everything happens on `featurebandit/<slug>`. It never merges, never pushes and
-never touches your uncommitted work. Ctrl-C kills the running Claude session with
+Everything happens on `featurebandit/<slug>` — or on the branch you are already
+on, with `FEATUREBANDIT_BRANCH=current`. It never merges, never pushes and never
+touches your uncommitted work. Ctrl-C kills the running Claude session with
 it; rerun and it continues from the last checkpoint. Every call's full output is
 kept under `.featurebandit/logs/<feature>/<stage>/`.
 
@@ -106,6 +107,7 @@ and repeated at every stage, because then nothing but you is checking the code.
 | Variable | |
 |---|---|
 | `FEATUREBANDIT_CHOICES=a,a,c,a,a,a` | gate answers when there is no terminal; without them the run stops rather than guessing |
+| `FEATUREBANDIT_BRANCH=current` | work on the branch you are already on instead of creating `featurebandit/<slug>` |
 | `FEATUREBANDIT_INSTALL=1` | say yes to installing missing dependencies |
 | `FEATUREBANDIT_TIMEOUT=3600` | seconds one call may take |
 | `NO_COLOR`, `FEATUREBANDIT_TTY=0` or `1` | colour off; force plain or interactive rendering |
@@ -114,7 +116,7 @@ and repeated at every stage, because then nothing but you is checking the code.
 
 ```bash
 ./test/smoke.sh             # the whole pipeline against a stubbed Claude, free
-./test/regress.sh           # 27 failure and resume scenarios, free
+./test/regress.sh           # 29 failure and resume scenarios, free
 ./test/ui.sh                # the terminal interface and the logs, free
 ./test/e2e.sh               # the real plugins and Spec Kit install, free
 ./test/e2e.sh --dispatch    # also dispatch a real agent and load the real skills
